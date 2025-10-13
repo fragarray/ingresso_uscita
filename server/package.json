@@ -1,0 +1,28 @@
+{
+  "name": "ingresso-uscita-server",
+  "version": "1.0.0",
+  "description": "Server per sistema di gestione timbrature",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "clean": "node -e \"const fs=require('fs');const path=require('path');const dir='./reports';fs.readdirSync(dir).forEach(f=>{if(f.startsWith('attendance_report_')||f.startsWith('BACKUP_'))fs.unlinkSync(path.join(dir,f))});console.log('✓ Reports temporanei eliminati')\""
+  },
+  "keywords": [
+    "attendance",
+    "tracking",
+    "geofencing",
+    "employees"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
