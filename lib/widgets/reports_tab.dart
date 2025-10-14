@@ -15,11 +15,14 @@ class ReportsTab extends StatefulWidget {
 class _ReportsTabState extends State<ReportsTab> {
   bool _isLoading = false;
   List<Employee> _employees = [];
+  List<Employee> _filteredEmployees = [];
   List<WorkSite> _workSites = [];
   Employee? _selectedEmployee;
   WorkSite? _selectedWorkSite;
   DateTime? _startDate;
   DateTime? _endDate;
+  bool _includeInactive = false;
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -27,17 +30,39 @@ class _ReportsTabState extends State<ReportsTab> {
     // Imposta date default: oggi e 7 giorni fa
     _endDate = DateTime.now();
     _startDate = DateTime.now().subtract(const Duration(days: 7));
+    _searchController.addListener(_filterEmployees);
     _loadData();
+  }
+  
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+  
+  void _filterEmployees() {
+    final query = _searchController.text.toLowerCase();
+    setState(() {
+      if (query.isEmpty) {
+        _filteredEmployees = _employees;
+      } else {
+        _filteredEmployees = _employees.where((emp) {
+          return emp.name.toLowerCase().contains(query) ||
+                 emp.email.toLowerCase().contains(query);
+        }).toList();
+      }
+    });
   }
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
-      final employees = await ApiService.getEmployees();
+      final employees = await ApiService.getEmployees(includeInactive: _includeInactive);
       final workSites = await ApiService.getWorkSites();
       if (!mounted) return;
       setState(() {
         _employees = employees;
+        _filteredEmployees = employees;
         _workSites = workSites;
       });
     } catch (e) {
@@ -60,6 +85,7 @@ class _ReportsTabState extends State<ReportsTab> {
         workSiteId: _selectedWorkSite?.id,
         startDate: _startDate,
         endDate: _endDate,
+        includeInactive: _includeInactive,
       );
 
       if (filePath != null) {
@@ -248,24 +274,136 @@ class _ReportsTabState extends State<ReportsTab> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  // Dropdown Dipendente
-                  DropdownButtonFormField<Employee?>(
-                    value: _selectedEmployee,
-                    decoration: const InputDecoration(
-                      labelText: 'Dipendente',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: [
-                      const DropdownMenuItem<Employee?>(
-                        value: null,
-                        child: Text('Tutti i dipendenti'),
+                  // Campo ricerca Dipendente con checkbox inattivi
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _searchController,
+                              decoration: InputDecoration(
+                                labelText: 'Cerca dipendente',
+                                border: const OutlineInputBorder(),
+                                prefixIcon: const Icon(Icons.search),
+                                suffixIcon: _searchController.text.isNotEmpty
+                                    ? IconButton(
+                                        icon: const Icon(Icons.clear),
+                                        onPressed: () {
+                                          _searchController.clear();
+                                          setState(() => _selectedEmployee = null);
+                                        },
+                                      )
+                                    : null,
+                                hintText: 'Nome o email dipendente...',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Tooltip(
+                            message: 'Includi dipendenti eliminati',
+                            child: FilterChip(
+                              label: const Text('Inattivi'),
+                              selected: _includeInactive,
+                              onSelected: (value) {
+                                setState(() {
+                                  _includeInactive = value;
+                                  _selectedEmployee = null;
+                                });
+                                _loadData();
+                              },
+                              avatar: Icon(
+                                _includeInactive ? Icons.check_circle : Icons.person_off,
+                                size: 18,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      ..._employees.map((e) => DropdownMenuItem<Employee>(
-                            value: e,
-                            child: Text(e.name),
-                          )),
+                      const SizedBox(height: 8),
+                      // Lista dipendenti filtrati
+                      if (_searchController.text.isNotEmpty || _selectedEmployee != null)
+                        Container(
+                          constraints: const BoxConstraints(maxHeight: 200),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey[300]!),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: ListView(
+                            shrinkWrap: true,
+                            children: [
+                              // Opzione "Tutti"
+                              if (_searchController.text.isEmpty)
+                                ListTile(
+                                  leading: const Icon(Icons.people),
+                                  title: const Text('Tutti i dipendenti'),
+                                  selected: _selectedEmployee == null,
+                                  onTap: () {
+                                    setState(() {
+                                      _selectedEmployee = null;
+                                      _searchController.clear();
+                                    });
+                                  },
+                                ),
+                              // Dipendenti filtrati
+                              ..._filteredEmployees.map((emp) => ListTile(
+                                    leading: Icon(
+                                      emp.isAdmin ? Icons.admin_panel_settings : Icons.person,
+                                      color: emp.isActive ? Colors.blue : Colors.grey,
+                                    ),
+                                    title: Text(
+                                      emp.name,
+                                      style: TextStyle(
+                                        color: emp.isActive ? Colors.black : Colors.grey,
+                                        decoration: emp.isActive ? null : TextDecoration.lineThrough,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      '${emp.email}${emp.isActive ? "" : " (Eliminato)"}',
+                                      style: TextStyle(
+                                        color: emp.isActive ? Colors.grey[600] : Colors.grey[400],
+                                      ),
+                                    ),
+                                    trailing: emp.isActive 
+                                        ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
+                                        : const Icon(Icons.cancel, color: Colors.red, size: 20),
+                                    selected: _selectedEmployee?.id == emp.id,
+                                    onTap: () {
+                                      setState(() {
+                                        _selectedEmployee = emp;
+                                        _searchController.text = emp.name;
+                                      });
+                                    },
+                                  )),
+                              if (_filteredEmployees.isEmpty)
+                                const Padding(
+                                  padding: EdgeInsets.all(16.0),
+                                  child: Center(
+                                    child: Text(
+                                      'Nessun dipendente trovato',
+                                      style: TextStyle(color: Colors.grey),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      // Dipendente selezionato
+                      if (_selectedEmployee != null && _searchController.text.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Chip(
+                            avatar: Icon(
+                              _selectedEmployee!.isAdmin ? Icons.admin_panel_settings : Icons.person,
+                              size: 18,
+                            ),
+                            label: Text(_selectedEmployee!.name),
+                            deleteIcon: const Icon(Icons.close, size: 18),
+                            onDeleted: () => setState(() => _selectedEmployee = null),
+                          ),
+                        ),
                     ],
-                    onChanged: (value) => setState(() => _selectedEmployee = value),
                   ),
                   const SizedBox(height: 16),
                   // Dropdown Cantiere

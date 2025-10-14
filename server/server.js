@@ -151,7 +151,7 @@ app.post('/api/attendance/force', (req, res) => {
     }
     
     // Crea il deviceInfo con admin e note
-    let deviceInfo = `Forced by admin: ${admin.name}`;
+    let deviceInfo = `Forzato da ${admin.name}`;
     if (notes && notes.trim()) {
       deviceInfo += ` | Note: ${notes.trim()}`;
     }
@@ -195,7 +195,14 @@ app.post('/api/attendance/force', (req, res) => {
 });
 
 app.get('/api/employees', (req, res) => {
-  db.all('SELECT * FROM employees', [], (err, rows) => {
+  // Parametro per includere dipendenti inattivi: ?includeInactive=true
+  const includeInactive = req.query.includeInactive === 'true';
+  
+  const query = includeInactive 
+    ? 'SELECT * FROM employees ORDER BY isActive DESC, name ASC'
+    : 'SELECT * FROM employees WHERE isActive = 1 ORDER BY name ASC';
+  
+  db.all(query, [], (err, rows) => {
     if (err) {
       res.status(500).json({ error: err.message });
       return;
@@ -243,12 +250,12 @@ app.put('/api/employees/:id', (req, res) => {
 });
 
 app.delete('/api/employees/:id', (req, res) => {
-  // Rimuovi il dipendente (admin o normale)
+  // Soft delete: marca il dipendente come inattivo invece di eliminarlo
   // I controlli di sicurezza sono gestiti lato client:
   // - Non può eliminare se stesso
   // - Non può eliminare l'unico admin
-  db.run('DELETE FROM employees WHERE id = ?',
-    [req.params.id],
+  db.run('UPDATE employees SET isActive = 0, deletedAt = ? WHERE id = ?',
+    [new Date().toISOString(), req.params.id],
     (err) => {
       if (err) {
         res.status(500).json({ error: err.message });
@@ -306,6 +313,7 @@ const updateExcelReport = async (filters = {}) => {
         ar.latitude,
         ar.longitude,
         e.name as employeeName,
+        e.isActive as employeeIsActive,
         ws.name as workSiteName
       FROM attendance_records ar
       JOIN employees e ON ar.employeeId = e.id
@@ -314,6 +322,11 @@ const updateExcelReport = async (filters = {}) => {
     `;
     
     const params = [];
+    
+    // Filtra dipendenti inattivi se non esplicitamente richiesto
+    if (!filters.includeInactive) {
+      query += ' AND e.isActive = 1';
+    }
     
     // Applica filtri se presenti
     if (filters.employeeId) {
@@ -415,7 +428,8 @@ app.get('/api/attendance/report', async (req, res) => {
       employeeId: req.query.employeeId,
       workSiteId: req.query.workSiteId,
       startDate: req.query.startDate,
-      endDate: req.query.endDate
+      endDate: req.query.endDate,
+      includeInactive: req.query.includeInactive === 'true'
     };
     const filePath = await updateExcelReport(filters);
     res.download(filePath);

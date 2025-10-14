@@ -87,9 +87,13 @@ class ApiService {
     }
   }
 
-  static Future<List<Employee>> getEmployees() async {
+  static Future<List<Employee>> getEmployees({bool includeInactive = false}) async {
     try {
-      final response = await http.get(Uri.parse('$baseUrl/employees'));
+      final uri = includeInactive 
+          ? Uri.parse('$baseUrl/employees?includeInactive=true')
+          : Uri.parse('$baseUrl/employees');
+          
+      final response = await http.get(uri);
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
         return data.map((json) => Employee.fromMap(json)).toList();
@@ -286,6 +290,7 @@ class ApiService {
     int? workSiteId,
     DateTime? startDate,
     DateTime? endDate,
+    bool includeInactive = false,
   }) async {
     try {
       final queryParams = <String, String>{};
@@ -293,6 +298,7 @@ class ApiService {
       if (workSiteId != null) queryParams['workSiteId'] = workSiteId.toString();
       if (startDate != null) queryParams['startDate'] = startDate.toIso8601String();
       if (endDate != null) queryParams['endDate'] = endDate.toIso8601String();
+      if (includeInactive) queryParams['includeInactive'] = 'true';
 
       final uri = Uri.parse('$baseUrl/attendance/report').replace(queryParameters: queryParams);
       

@@ -47,6 +47,23 @@ db.serialize(() => {
       console.log('✓ Column forcedByAdminId added to attendance_records');
     }
   });
+  
+  // Aggiungi colonne per soft delete degli employees
+  db.run(`ALTER TABLE employees ADD COLUMN isActive INTEGER DEFAULT 1`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding isActive column:', err);
+    } else if (!err) {
+      console.log('✓ Column isActive added to employees');
+    }
+  });
+  
+  db.run(`ALTER TABLE employees ADD COLUMN deletedAt DATETIME`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding deletedAt column:', err);
+    } else if (!err) {
+      console.log('✓ Column deletedAt added to employees');
+    }
+  });
 
   // Nuova tabella work_sites
   db.run(`CREATE TABLE IF NOT EXISTS work_sites (
