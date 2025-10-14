@@ -24,9 +24,29 @@ db.serialize(() => {
     deviceInfo TEXT,
     latitude REAL NOT NULL,
     longitude REAL NOT NULL,
+    isForced INTEGER DEFAULT 0,
+    forcedByAdminId INTEGER,
     FOREIGN KEY (employeeId) REFERENCES employees (id),
-    FOREIGN KEY (workSiteId) REFERENCES work_sites (id)
+    FOREIGN KEY (workSiteId) REFERENCES work_sites (id),
+    FOREIGN KEY (forcedByAdminId) REFERENCES employees (id)
   )`);
+  
+  // Aggiungi colonne per timbrature forzate se non esistono
+  db.run(`ALTER TABLE attendance_records ADD COLUMN isForced INTEGER DEFAULT 0`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding isForced column:', err);
+    } else if (!err) {
+      console.log('✓ Column isForced added to attendance_records');
+    }
+  });
+  
+  db.run(`ALTER TABLE attendance_records ADD COLUMN forcedByAdminId INTEGER`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding forcedByAdminId column:', err);
+    } else if (!err) {
+      console.log('✓ Column forcedByAdminId added to attendance_records');
+    }
+  });
 
   // Nuova tabella work_sites
   db.run(`CREATE TABLE IF NOT EXISTS work_sites (
@@ -56,6 +76,16 @@ db.serialize(() => {
   db.all(`PRAGMA table_info(work_sites)`, [], (err, columns) => {
     if (!err) {
       console.log('Work_sites table structure:');
+      columns.forEach(col => {
+        console.log(`  - ${col.name} (${col.type}) ${col.dflt_value ? `DEFAULT ${col.dflt_value}` : ''}`);
+      });
+    }
+  });
+  
+  // Verifica struttura tabella attendance_records
+  db.all(`PRAGMA table_info(attendance_records)`, [], (err, columns) => {
+    if (!err) {
+      console.log('Attendance_records table structure:');
       columns.forEach(col => {
         console.log(`  - ${col.name} (${col.type}) ${col.dflt_value ? `DEFAULT ${col.dflt_value}` : ''}`);
       });

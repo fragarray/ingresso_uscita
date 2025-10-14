@@ -22,6 +22,8 @@ class _EmployeePageState extends State<EmployeePage> {
   List<WorkSite> _workSites = [];
   WorkSite? _selectedWorkSite;
   String? _distanceInfo;
+  double _gpsAccuracy = 0.0; // Accuratezza GPS in metri
+  bool _hasGoodAccuracy = false; // Se l'accuratezza è accettabile
 
   @override
   void initState() {
@@ -51,24 +53,69 @@ class _EmployeePageState extends State<EmployeePage> {
     final employee = context.read<AppState>().currentEmployee;
     if (employee == null) return;
 
-    final records = await ApiService.getAttendanceRecords(employeeId: employee.id!);
-    if (records.isNotEmpty) {
-      setState(() {
-        _isClockedIn = records.first.type == 'in';
-        _recentRecords = records.take(5).toList();
+    try {
+      final records = await ApiService.getAttendanceRecords(employeeId: employee.id!);
+      
+      debugPrint('=== DEBUG LOAD LAST RECORD ===');
+      debugPrint('Total records: ${records.length}');
+      
+      if (records.isNotEmpty) {
+        debugPrint('First 3 records:');
+        for (int i = 0; i < (records.length > 3 ? 3 : records.length); i++) {
+          debugPrint('  [$i] type: ${records[i].type}, time: ${records[i].timestamp}, id: ${records[i].id}');
+        }
         
-        // Se l'ultimo record ha un cantiere, selezionalo
-        if (records.first.workSiteId != null && _workSites.isNotEmpty) {
+        // I record arrivano in ordine DESC (più recente prima)
+        final lastRecord = records.first;
+        debugPrint('Last record type: ${lastRecord.type}');
+        debugPrint('Last record timestamp: ${lastRecord.timestamp}');
+        debugPrint('Last record workSiteId: ${lastRecord.workSiteId}');
+        
+        // Se l'ultimo record è 'in', significa che c'è un ingresso aperto
+        final hasOpenClocking = lastRecord.type == 'in';
+        WorkSite? lastWorkSite;
+        
+        if (hasOpenClocking && lastRecord.workSiteId != null && _workSites.isNotEmpty) {
           try {
-            _selectedWorkSite = _workSites.firstWhere(
-              (ws) => ws.id == records.first.workSiteId,
+            lastWorkSite = _workSites.firstWhere(
+              (ws) => ws.id == lastRecord.workSiteId,
             );
+            debugPrint('Found worksite: ${lastWorkSite.name}');
           } catch (e) {
-            // Cantiere non trovato, usa il primo disponibile
-            _selectedWorkSite = _workSites.first;
+            debugPrint('Cantiere non trovato: ${lastRecord.workSiteId}');
           }
         }
-      });
+        
+        if (mounted) {
+          setState(() {
+            _isClockedIn = hasOpenClocking;
+            _recentRecords = records.take(5).toList();
+            
+            // Se c'è un ingresso aperto, seleziona il cantiere
+            if (hasOpenClocking && lastWorkSite != null) {
+              _selectedWorkSite = lastWorkSite;
+              debugPrint('Setting selected worksite: ${lastWorkSite.name}');
+            } else if (_selectedWorkSite == null && _workSites.isNotEmpty) {
+              // Se non c'è un ingresso aperto, suggerisci il cantiere più vicino
+              // (verrà fatto da _updateLocation)
+              debugPrint('No open clocking, will suggest nearest worksite');
+            }
+          });
+        }
+        
+        debugPrint('Final state - isClockedIn: $_isClockedIn');
+        debugPrint('=== END DEBUG ===');
+      } else {
+        debugPrint('No records found for employee');
+        if (mounted) {
+          setState(() {
+            _isClockedIn = false;
+            _recentRecords = [];
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading last record: $e');
     }
   }
 
@@ -76,9 +123,18 @@ class _EmployeePageState extends State<EmployeePage> {
     try {
       final location = await _getCurrentLocation();
       if (location != null && mounted) {
+        // Calcola l'accuratezza GPS (accuracy è in metri)
+        final accuracy = location.accuracy ?? 999.0;
+        final accuracyPercentage = _calculateAccuracyPercentage(accuracy);
+        final minRequired = context.read<AppState>().minGpsAccuracyPercent;
+        
         setState(() {
           _currentLocation = location;
+          _gpsAccuracy = accuracy;
+          _hasGoodAccuracy = accuracyPercentage >= minRequired;
         });
+        
+        debugPrint('GPS Accuracy: ${accuracy.toStringAsFixed(1)}m (${accuracyPercentage.toStringAsFixed(0)}%) - Required: ${minRequired.toInt()}%');
         
         // Suggerisci il cantiere più vicino se non ne è selezionato uno
         if (_selectedWorkSite == null && _workSites.isNotEmpty) {
@@ -101,6 +157,20 @@ class _EmployeePageState extends State<EmployeePage> {
       debugPrint('Error updating location: $e');
     }
   }
+  
+  /// Calcola la percentuale di accuratezza GPS
+  /// 100% = 5 metri o meno
+  /// 0% = 50 metri o più
+  double _calculateAccuracyPercentage(double accuracy) {
+    const double bestAccuracy = 5.0; // 5 metri = 100%
+    const double worstAccuracy = 50.0; // 50 metri = 0%
+    
+    if (accuracy <= bestAccuracy) return 100.0;
+    if (accuracy >= worstAccuracy) return 0.0;
+    
+    // Interpolazione lineare
+    return 100.0 - ((accuracy - bestAccuracy) / (worstAccuracy - bestAccuracy) * 100.0);
+  }
 
   Future<LocationData?> _getCurrentLocation() async {
     return LocationService.getCurrentLocation();
@@ -113,6 +183,23 @@ class _EmployeePageState extends State<EmployeePage> {
     if (_selectedWorkSite == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Seleziona un cantiere prima di timbrare')),
+      );
+      return;
+    }
+    
+    // Verifica accuratezza GPS
+    if (!_hasGoodAccuracy && !Platform.isWindows && !kIsWeb) {
+      final accuracyPercentage = _calculateAccuracyPercentage(_gpsAccuracy);
+      final minRequired = context.read<AppState>().minGpsAccuracyPercent;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Accuratezza GPS insufficiente (${accuracyPercentage.toStringAsFixed(0)}%).\n'
+            'Richiesta: minimo ${minRequired.toInt()}%. Attendi un segnale GPS migliore.'
+          ),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
       );
       return;
     }
@@ -133,7 +220,7 @@ class _EmployeePageState extends State<EmployeePage> {
         return;
       }
 
-      // Verifica se la posizione è entro il raggio del cantiere
+      // Verifica se la posizione è entro il raggio del cantiere (SEMPRE, sia IN che OUT)
       final isWithinRange = LocationService.isWithinWorkSite(locationData, _selectedWorkSite!);
       
       if (!isWithinRange && !Platform.isWindows && !kIsWeb) {
@@ -145,33 +232,23 @@ class _EmployeePageState extends State<EmployeePage> {
           _selectedWorkSite!.longitude,
         );
         
-        // Mostra dialog di conferma se fuori range
-        final confirm = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Fuori dal raggio del cantiere'),
+        // Messaggio diverso per IN e OUT
+        final action = _isClockedIn ? 'uscita' : 'ingresso';
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
             content: Text(
-              'Sei a ${distance.toStringAsFixed(0)} metri dal cantiere selezionato.\n'
-              'Il raggio massimo consentito è ${LocationService.maxDistanceMeters} metri.\n\n'
-              'Vuoi comunque registrare la timbratura?'
+              'Fuori dal cantiere!\n'
+              'Sei a ${distance.toStringAsFixed(0)} metri dal cantiere.\n'
+              'Devi essere entro ${_selectedWorkSite!.radiusMeters.toInt()} metri per timbrare $action.'
             ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Annulla'),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Continua'),
-              ),
-            ],
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
           ),
         );
         
-        if (confirm != true) {
-          setState(() => _isLoading = false);
-          return;
-        }
+        setState(() => _isLoading = false);
+        return;
       }
 
       final record = AttendanceRecord(
@@ -183,19 +260,33 @@ class _EmployeePageState extends State<EmployeePage> {
         latitude: locationData.latitude ?? 0.0,
         longitude: locationData.longitude ?? 0.0,
       );
+      
+      // Salva il tipo per il messaggio
+      final recordType = record.type;
 
       final success = await ApiService.recordAttendance(record);
       
       if (success) {
-        setState(() {
-          _isClockedIn = !_isClockedIn;
-        });
+        debugPrint('=== ATTENDANCE RECORDED ===');
+        debugPrint('Record type sent: ${record.type}');
+        debugPrint('Current _isClockedIn before reload: $_isClockedIn');
         
-        await _loadLastRecord();  // Ricarica i record recenti
+        // Piccolo delay per assicurarsi che il DB abbia processato l'insert
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        // Non invertire manualmente lo stato, lascia che _loadLastRecord lo calcoli dal server
+        await _loadLastRecord();  // Ricarica i record e aggiorna lo stato
+        
+        debugPrint('Current _isClockedIn after reload: $_isClockedIn');
+        debugPrint('=== END ATTENDANCE RECORDED ===');
+        
+        // Notifica l'admin page per aggiornare le presenze
+        if (!mounted) return;
+        context.read<AppState>().triggerRefresh();
         
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_isClockedIn ? 
+          SnackBar(content: Text(recordType == 'in' ? 
             'Timbratura ingresso registrata' : 'Timbratura uscita registrata')),
         );
       } else {
@@ -261,6 +352,95 @@ class _EmployeePageState extends State<EmployeePage> {
               ),
             ),
             const SizedBox(height: 16),
+            // Indicatore Accuratezza GPS
+            if (_currentLocation != null) Card(
+              color: _hasGoodAccuracy ? Colors.green[50] : Colors.orange[50],
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          _hasGoodAccuracy ? Icons.gps_fixed : Icons.gps_not_fixed,
+                          color: _hasGoodAccuracy ? Colors.green : Colors.orange,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Segnale GPS',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    // Barra di progresso
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: LinearProgressIndicator(
+                        value: _calculateAccuracyPercentage(_gpsAccuracy) / 100,
+                        minHeight: 20,
+                        backgroundColor: Colors.grey[300],
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          _hasGoodAccuracy ? Colors.green : Colors.orange,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Precisione: ${_gpsAccuracy.toStringAsFixed(1)}m',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[700],
+                          ),
+                        ),
+                        Text(
+                          '${_calculateAccuracyPercentage(_gpsAccuracy).toStringAsFixed(0)}%',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: _hasGoodAccuracy ? Colors.green : Colors.orange,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (!_hasGoodAccuracy) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.orange[100],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.warning, size: 16, color: Colors.orange),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Consumer<AppState>(
+                                builder: (context, appState, _) => Text(
+                                  'Segnale GPS debole. Richiesto minimo ${appState.minGpsAccuracyPercent.toInt()}% per timbrare.',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.orange[900],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
             // Selezione Cantiere
             Card(
               child: Padding(
@@ -288,7 +468,8 @@ class _EmployeePageState extends State<EmployeePage> {
                           child: Text(workSite.name),
                         );
                       }).toList(),
-                      onChanged: (value) {
+                      onChanged: _isClockedIn ? null : (value) {
+                        // Se già timbrato IN, non permetti il cambio cantiere
                         setState(() {
                           _selectedWorkSite = value;
                           if (value != null && _currentLocation != null) {
@@ -300,6 +481,32 @@ class _EmployeePageState extends State<EmployeePage> {
                         });
                       },
                     ),
+                    if (_isClockedIn && _selectedWorkSite != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.green[50],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.green, width: 1),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.info, color: Colors.green, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Sei già timbrato presso questo cantiere. Timbra l\'uscita per cambiare cantiere.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.green[900],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     if (_distanceInfo != null && _selectedWorkSite != null) ...[
                       const SizedBox(height: 8),
                       Row(

@@ -36,11 +36,13 @@ class WorkSite {
     return WorkSite(
       id: map['id'],
       name: map['name'],
-      latitude: map['latitude'],
-      longitude: map['longitude'],
+      latitude: (map['latitude'] as num).toDouble(),
+      longitude: (map['longitude'] as num).toDouble(),
       address: map['address'],
       isActive: map['isActive'] == 1,
-      radiusMeters: map['radiusMeters']?.toDouble() ?? 100.0,
+      radiusMeters: map['radiusMeters'] != null 
+          ? (map['radiusMeters'] as num).toDouble() 
+          : 100.0,
       createdAt: map['createdAt'] != null ? DateTime.parse(map['createdAt']) : null,
     );
   }

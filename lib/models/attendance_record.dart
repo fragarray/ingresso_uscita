@@ -7,6 +7,8 @@ class AttendanceRecord {
   final String deviceInfo;
   final double latitude;
   final double longitude;
+  final bool isForced; // Se è una timbratura forzata
+  final int? forcedByAdminId; // ID admin che ha forzato
 
   AttendanceRecord({
     this.id,
@@ -17,6 +19,8 @@ class AttendanceRecord {
     required this.deviceInfo,
     required this.latitude,
     required this.longitude,
+    this.isForced = false,
+    this.forcedByAdminId,
   });
 
   Map<String, dynamic> toMap() {
@@ -29,6 +33,8 @@ class AttendanceRecord {
       'deviceInfo': deviceInfo,
       'latitude': latitude,
       'longitude': longitude,
+      'isForced': isForced ? 1 : 0,
+      'forcedByAdminId': forcedByAdminId,
     };
   }
 
@@ -39,9 +45,11 @@ class AttendanceRecord {
       workSiteId: map['workSiteId'],
       timestamp: DateTime.parse(map['timestamp']),
       type: map['type'],
-      deviceInfo: map['deviceInfo'],
-      latitude: map['latitude'],
-      longitude: map['longitude'],
+      deviceInfo: map['deviceInfo'] ?? '',
+      latitude: (map['latitude'] as num).toDouble(),
+      longitude: (map['longitude'] as num).toDouble(),
+      isForced: (map['isForced'] ?? 0) == 1,
+      forcedByAdminId: map['forcedByAdminId'],
     );
   }
 }

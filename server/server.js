@@ -66,10 +66,12 @@ app.get('/api/attendance', (req, res) => {
         type,
         deviceInfo,
         CAST(latitude AS REAL) as latitude,
-        CAST(longitude AS REAL) as longitude
+        CAST(longitude AS REAL) as longitude,
+        isForced,
+        forcedByAdminId
       FROM attendance_records 
       WHERE employeeId = ? 
-      ORDER BY timestamp DESC`
+      ORDER BY timestamp DESC, id DESC`
     : `SELECT 
         id,
         employeeId,
@@ -78,9 +80,11 @@ app.get('/api/attendance', (req, res) => {
         type,
         deviceInfo,
         CAST(latitude AS REAL) as latitude,
-        CAST(longitude AS REAL) as longitude
+        CAST(longitude AS REAL) as longitude,
+        isForced,
+        forcedByAdminId
       FROM attendance_records 
-      ORDER BY timestamp DESC`;
+      ORDER BY timestamp DESC, id DESC`;
   const params = employeeId ? [employeeId] : [];
   
   db.all(query, params, (err, rows) => {
@@ -95,9 +99,19 @@ app.get('/api/attendance', (req, res) => {
 app.post('/api/attendance', (req, res) => {
   const record = req.body;
   db.run(`INSERT INTO attendance_records 
-    (employeeId, workSiteId, timestamp, type, deviceInfo, latitude, longitude) 
-    VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [record.employeeId, record.workSiteId, record.timestamp, record.type, record.deviceInfo, record.latitude, record.longitude],
+    (employeeId, workSiteId, timestamp, type, deviceInfo, latitude, longitude, isForced, forcedByAdminId) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      record.employeeId, 
+      record.workSiteId, 
+      record.timestamp, 
+      record.type, 
+      record.deviceInfo, 
+      record.latitude, 
+      record.longitude,
+      record.isForced || 0,
+      record.forcedByAdminId || null
+    ],
     async (err) => {
       if (err) {
         res.status(500).json({ error: err.message });
@@ -113,6 +127,71 @@ app.post('/api/attendance', (req, res) => {
         res.json({ success: true }); // La timbratura è comunque riuscita
       }
     });
+});
+
+// Endpoint per timbratura forzata
+app.post('/api/attendance/force', (req, res) => {
+  const { employeeId, workSiteId, type, adminId, notes } = req.body;
+  
+  if (!employeeId || !workSiteId || !type || !adminId) {
+    res.status(400).json({ error: 'Missing required fields' });
+    return;
+  }
+  
+  // Verifica che l'admin esista ed sia effettivamente admin
+  db.get('SELECT * FROM employees WHERE id = ? AND isAdmin = 1', [adminId], (err, admin) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    
+    if (!admin) {
+      res.status(403).json({ error: 'Unauthorized: Not an admin' });
+      return;
+    }
+    
+    // Crea il deviceInfo con admin e note
+    let deviceInfo = `Forced by admin: ${admin.name}`;
+    if (notes && notes.trim()) {
+      deviceInfo += ` | Note: ${notes.trim()}`;
+    }
+    
+    // Crea timestamp in formato locale (non UTC) per consistenza con i record normali
+    // I record normali arrivano da Flutter con DateTime.now() che è locale
+    const now = new Date();
+    const localTimestamp = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().slice(0, -1);
+    
+    // Crea record di timbratura forzata
+    db.run(`INSERT INTO attendance_records 
+      (employeeId, workSiteId, timestamp, type, deviceInfo, latitude, longitude, isForced, forcedByAdminId) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        employeeId,
+        workSiteId,
+        localTimestamp,  // Usa timestamp locale invece di UTC
+        type,
+        deviceInfo,
+        0.0, // Latitude 0 per timbrature forzate
+        0.0, // Longitude 0 per timbrature forzate
+        1,   // isForced = true
+        adminId
+      ],
+      async (err) => {
+        if (err) {
+          res.status(500).json({ error: err.message });
+          return;
+        }
+        
+        // Aggiorna il report Excel
+        try {
+          await updateExcelReport();
+          res.json({ success: true, message: 'Forced attendance recorded' });
+        } catch (error) {
+          console.error('Error updating Excel report:', error);
+          res.json({ success: true, message: 'Forced attendance recorded' });
+        }
+      });
+  });
 });
 
 app.get('/api/employees', (req, res) => {
@@ -164,7 +243,11 @@ app.put('/api/employees/:id', (req, res) => {
 });
 
 app.delete('/api/employees/:id', (req, res) => {
-  db.run('DELETE FROM employees WHERE id = ? AND isAdmin = 0',
+  // Rimuovi il dipendente (admin o normale)
+  // I controlli di sicurezza sono gestiti lato client:
+  // - Non può eliminare se stesso
+  // - Non può eliminare l'unico admin
+  db.run('DELETE FROM employees WHERE id = ?',
     [req.params.id],
     (err) => {
       if (err) {

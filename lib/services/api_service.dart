@@ -44,6 +44,48 @@ class ApiService {
       return false;
     }
   }
+  
+  static Future<bool> forceAttendance({
+    required int employeeId,
+    required int workSiteId,
+    required String type,
+    required int adminId,
+    String? notes,
+  }) async {
+    try {
+      print('=== FORCE ATTENDANCE API CALL ===');
+      print('Employee ID: $employeeId');
+      print('WorkSite ID: $workSiteId');
+      print('Type: $type');
+      print('Admin ID: $adminId');
+      print('Notes: $notes');
+      
+      final requestBody = {
+        'employeeId': employeeId,
+        'workSiteId': workSiteId,
+        'type': type,
+        'adminId': adminId,
+        'notes': notes,
+      };
+      print('Request body: ${json.encode(requestBody)}');
+      
+      final response = await http.post(
+        Uri.parse('$baseUrl/attendance/force'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(requestBody),
+      );
+      
+      print('Response status: ${response.statusCode}');
+      print('Response body: ${response.body}');
+      
+      final success = response.statusCode == 200;
+      print('Force attendance success: $success');
+      return success;
+    } catch (e) {
+      print('Force attendance error: $e');
+      return false;
+    }
+  }
 
   static Future<List<Employee>> getEmployees() async {
     try {
