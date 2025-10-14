@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
 import '../models/employee.dart';
 import '../models/attendance_record.dart';
 import '../models/work_site.dart';
@@ -198,6 +199,226 @@ class _PersonnelTabState extends State<PersonnelTab> {
           ),
         );
         return;
+      }
+    }
+    
+    // Verifica se il dipendente è attualmente timbrato IN
+    final records = await ApiService.getAttendanceRecords(employeeId: employee.id);
+    if (records.isNotEmpty) {
+      // Ordina per timestamp decrescente per ottenere l'ultima timbratura
+      records.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      final lastRecord = records.first;
+      
+      if (lastRecord.type == 'in') {
+        // Il dipendente è attualmente timbrato IN, chiedi di timbrare OUT prima
+        final shouldForceOut = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Row(
+              children: [
+                const Icon(Icons.warning, color: Colors.orange, size: 30),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Forza Timbratura OUT - ${employee.name}'),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange[50],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange, width: 1),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.info, color: Colors.orange, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'STATO ATTUALE: TIMBRATO IN',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.orange[900],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Ultima timbratura:',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  Text('• Tipo: ENTRATA'),
+                  Text('• Data/Ora: ${DateFormat('dd/MM/yyyy HH:mm').format(lastRecord.timestamp)}'),
+                  Text('• Cantiere: ${lastRecord.workSiteId != null ? "ID ${lastRecord.workSiteId}" : "N/A"}'),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red[50],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.red[200]!, width: 1),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.error_outline, color: Colors.red, size: 20),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'È necessario timbrare OUT prima di eliminare il dipendente.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Nota: La timbratura OUT verrà registrata automaticamente con i dati dell\'ultima timbratura IN.',
+                    style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('ANNULLA ELIMINAZIONE'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.orange,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('TIMBRA OUT E CONTINUA'),
+              ),
+            ],
+          ),
+        );
+        
+        if (shouldForceOut != true) {
+          return; // Annulla l'eliminazione
+        }
+        
+        // Effettua timbratura OUT forzata
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const AlertDialog(
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('Timbratura OUT in corso...'),
+              ],
+            ),
+          ),
+        );
+        
+        final currentUser = context.read<AppState>().currentEmployee;
+        final success = await ApiService.forceAttendance(
+          employeeId: employee.id!,
+          type: 'out',
+          workSiteId: lastRecord.workSiteId ?? 0, // Usa 0 se null
+          adminId: currentUser?.id ?? 0,
+          notes: 'Timbratura OUT automatica prima dell\'eliminazione',
+        );
+        
+        if (!mounted) return;
+        Navigator.pop(context); // Chiudi loading dialog
+        
+        if (!success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Errore durante la timbratura OUT. Eliminazione annullata.'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 4),
+            ),
+          );
+          return;
+        }
+        
+        // Mostra conferma timbratura OUT
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.green, size: 30),
+                SizedBox(width: 8),
+                Text('Timbratura OUT completata'),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${employee.name} è stato timbrato OUT con successo.',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green[50],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green[200]!, width: 1),
+                  ),
+                  child: const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.info_outline, color: Colors.green, size: 20),
+                          SizedBox(width: 8),
+                          Text(
+                            'Timbratura registrata',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'La timbratura OUT è stata registrata nel database e apparirà nei report.',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Ora puoi procedere con l\'eliminazione del dipendente.',
+                  style: TextStyle(fontSize: 13),
+                ),
+              ],
+            ),
+            actions: [
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('CONTINUA'),
+              ),
+            ],
+          ),
+        );
       }
     }
     
