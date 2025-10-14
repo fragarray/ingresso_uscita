@@ -43,3 +43,15 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Signing files (NON committare mai!)
+android/key.properties
+*.jks
+*.keystore
+*.pfx
+
+# Build outputs
+*.apk
+*.aab
+*.msix
+*.exe

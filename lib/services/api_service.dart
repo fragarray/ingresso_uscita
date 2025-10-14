@@ -10,7 +10,7 @@ import '../models/employee.dart';
 import '../models/work_site.dart';
 
 class ApiService {
-  static const String _defaultBaseUrl = 'http://192.168.1.2:3000/api';
+  static const String _defaultBaseUrl = 'http://fragarray.freeddns.it:3000/api';
   static String? _cachedBaseUrl;
 
   // Get base URL from SharedPreferences or use default
@@ -28,6 +28,13 @@ class ApiService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('serverIp', ip);
     _cachedBaseUrl = 'http://$ip:3000/api';
+  }
+
+  // Get default server IP (without port)
+  static String getDefaultServerIp() {
+    // Estrae l'IP da _defaultBaseUrl
+    final uri = Uri.parse(_defaultBaseUrl);
+    return uri.host;
   }
 
   // Test server connection and validate identity

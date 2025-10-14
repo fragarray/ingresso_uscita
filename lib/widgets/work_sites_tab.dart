@@ -2,9 +2,15 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:geocoding/geocoding.dart';
 import '../models/work_site.dart';
 import '../services/api_service.dart';
+import '../services/geocoding_service.dart';
+
+// Tipi di mappa disponibili
+enum MapType {
+  street,    // Mappa stradale (meno POI)
+  satellite, // Vista satellitare ibrida (foto + nomi strade)
+}
 
 class WorkSitesTab extends StatefulWidget {
   const WorkSitesTab({Key? key}) : super(key: key);
@@ -22,11 +28,15 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _radiusController = TextEditingController(text: '100');
+  final _addressSearchController = TextEditingController();
+  bool _isSearchingAddress = false;
+  MapType _currentMapType = MapType.street; // Tipo di mappa corrente
   
   @override
   void dispose() {
     _nameController.dispose();
     _radiusController.dispose();
+    _addressSearchController.dispose();
     super.dispose();
   }
 
@@ -131,18 +141,129 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
 
   Future<String> _getAddressFromCoordinates(LatLng position) async {
     try {
-      final placemarks = await placemarkFromCoordinates(
-        position.latitude,
-        position.longitude,
-      );
-      if (placemarks.isNotEmpty) {
-        final place = placemarks.first;
-        return '${place.street}, ${place.locality}, ${place.postalCode}, ${place.country}';
+      final result = await GeocodingService.reverseGeocode(position);
+      if (result != null) {
+        return result.displayName;
       }
       return 'Indirizzo non trovato';
     } catch (e) {
       return 'Errore nel recupero dell\'indirizzo';
     }
+  }
+
+  Future<void> _searchAndCenterAddress() async {
+    final address = _addressSearchController.text.trim();
+    if (address.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Inserire un indirizzo')),
+      );
+      return;
+    }
+
+    setState(() => _isSearchingAddress = true);
+
+    try {
+      final results = await GeocodingService.searchAddress(address);
+      print('Locations found: ${results.length}');
+      
+      if (results.isNotEmpty) {
+        final location = results.first;
+        print('Latitude: ${location.latitude}, Longitude: ${location.longitude}');
+        
+        final position = location.position;
+        print('LatLng created: $position');
+        
+        // Centra la mappa sull'indirizzo trovato con zoom massimo (18.0 - oltre diventa grigio)
+        print('Attempting to move map...');
+        _mapController.move(position, 18.0);
+        print('Map moved successfully');
+        
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Trovato: ${location.shortDescription}'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Indirizzo non trovato'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e, stackTrace) {
+      print('Errore geocoding: $e');
+      print('StackTrace: $stackTrace');
+      if (!mounted) return;
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Errore nella ricerca: ${e.toString()}'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSearchingAddress = false);
+      }
+    }
+  }
+
+  void _zoomIn() {
+    final currentZoom = _mapController.camera.zoom;
+    final newZoom = (currentZoom + 1).clamp(3.0, 18.0);
+    _mapController.move(_mapController.camera.center, newZoom);
+  }
+
+  void _zoomOut() {
+    final currentZoom = _mapController.camera.zoom;
+    final newZoom = (currentZoom - 1).clamp(3.0, 18.0);
+    _mapController.move(_mapController.camera.center, newZoom);
+  }
+
+  // Ottieni URL del tile provider in base al tipo di mappa
+  String _getTileUrl() {
+    switch (_currentMapType) {
+      case MapType.street:
+        // CartoDB Positron (pulito, professionale, gratuito per uso commerciale)
+        return 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png';
+      case MapType.satellite:
+        // ESRI World Imagery (satellitare)
+        return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+    }
+  }
+
+  // Ottieni URL overlay labels (solo per satellite)
+  String? _getLabelsUrl() {
+    if (_currentMapType == MapType.satellite) {
+      // CartoDB labels only (overlay trasparente con solo nomi)
+      return 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png';
+    }
+    return null;
+  }
+
+  // Ottieni nome visualizzato del tipo di mappa
+  String _getMapTypeName() {
+    switch (_currentMapType) {
+      case MapType.street:
+        return 'Stradale';
+      case MapType.satellite:
+        return 'Satellite';
+    }
+  }
+
+  // Cambia tipo di mappa (toggle tra 2 tipi)
+  void _cycleMapType() {
+    setState(() {
+      _currentMapType = _currentMapType == MapType.street 
+        ? MapType.satellite 
+        : MapType.street;
+    });
   }
 
   Future<double?> _editWorkSiteRadiusDialog(WorkSite workSite) async {
@@ -675,19 +796,35 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
           options: MapOptions(
             initialCenter: const LatLng(41.9028, 12.4964),
             initialZoom: 6.0,
+            minZoom: 3.0,
+            maxZoom: 18.0, // Oltre questo livello le tiles diventano grigie
             onTap: _isAddingWorkSite ? (_, point) {
               setState(() => _newWorkSitePosition = point);
             } : null,
           ),
           children: [
+            // Layer base (stradale o satellite)
             TileLayer(
-              urlTemplate: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+              urlTemplate: _getTileUrl(),
               userAgentPackageName: 'com.example.app',
-              subdomains: const ['a', 'b', 'c'],
+              subdomains: _currentMapType == MapType.satellite 
+                ? const [] // Satellite non usa subdomains
+                : const ['a', 'b', 'c'],
               maxZoom: 19,
               keepBuffer: 5,
               tileProvider: NetworkTileProvider(),
             ),
+            // Overlay nomi strade (solo su satellite)
+            if (_currentMapType == MapType.satellite)
+              TileLayer(
+                urlTemplate: _getLabelsUrl(),
+                userAgentPackageName: 'com.example.app',
+                subdomains: const ['a', 'b', 'c', 'd'],
+                maxZoom: 19,
+                keepBuffer: 5,
+                tileProvider: NetworkTileProvider(),
+              ),
+            // Marker cantieri
             MarkerLayer(
               markers: _workSites.map((site) => Marker(
                 point: LatLng(site.latitude, site.longitude),
@@ -733,6 +870,84 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
         ),
         if (_isLoading)
           const Center(child: CircularProgressIndicator()),
+        // Barra di ricerca indirizzo (funziona su tutte le piattaforme)
+        Positioned(
+          top: 16,
+          left: 16,
+          right: 16,
+          child: Card(
+            elevation: 4,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _addressSearchController,
+                      decoration: const InputDecoration(
+                        hintText: 'Cerca indirizzo...',
+                        border: InputBorder.none,
+                        prefixIcon: Icon(Icons.search),
+                      ),
+                      onSubmitted: (_) => _searchAndCenterAddress(),
+                    ),
+                  ),
+                  if (_isSearchingAddress)
+                    const Padding(
+                      padding: EdgeInsets.all(8.0),
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  else
+                    IconButton(
+                      icon: const Icon(Icons.navigation),
+                      onPressed: _searchAndCenterAddress,
+                      tooltip: 'Vai all\'indirizzo',
+                    ),
+                ],
+            ),
+          ),
+        ),
+        ),
+        // Pulsanti Zoom e Cambio Mappa (sinistra)
+        Positioned(
+          left: 16,
+          bottom: 16,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Pulsante cambio tipo mappa
+              FloatingActionButton.small(
+                heroTag: 'change_map',
+                onPressed: _cycleMapType,
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black87,
+                tooltip: _getMapTypeName(),
+                child: const Icon(Icons.layers),
+              ),
+              const SizedBox(height: 16), // Spazio maggiore tra cambio mappa e zoom
+              FloatingActionButton.small(
+                heroTag: 'zoom_in',
+                onPressed: _zoomIn,
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black87,
+                child: const Icon(Icons.add),
+              ),
+              const SizedBox(height: 8),
+              FloatingActionButton.small(
+                heroTag: 'zoom_out',
+                onPressed: _zoomOut,
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black87,
+                child: const Icon(Icons.remove),
+              ),
+            ],
+          ),
+        ),
+        // Pulsanti azioni cantiere (destra)
         Positioned(
           right: 16,
           bottom: 16,
@@ -769,7 +984,7 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
         ),
         if (_isAddingWorkSite)
           Positioned(
-            top: 16,
+            top: 80, // Spostato più in basso per non sovrapporsi alla barra di ricerca
             left: 16,
             right: 16,
             child: Card(

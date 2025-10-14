@@ -61,6 +61,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
+  msix: ^3.16.12
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -103,3 +104,15 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# Configurazione per generare installer Windows MSIX
+msix_config:
+  display_name: Ingresso Uscita
+  publisher_display_name: FragArray
+  identity_name: com.fragarray.ingressouscita
+  msix_version: 1.0.0.0
+  logo_path: windows/runner/resources/app_icon.ico
+  capabilities: internetClient, location
+  # Per firmare l'installer (opzionale, richiede certificato):
+  # certificate_path: path/to/certificate.pfx
+  # certificate_password: your_password
