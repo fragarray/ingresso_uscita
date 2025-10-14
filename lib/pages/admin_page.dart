@@ -32,7 +32,7 @@ class _AdminPageState extends State<AdminPage> {
             ),
           ],
           bottom: const TabBar(
-            isScrollable: true,
+            isScrollable: false,
             tabs: [
               Tab(icon: Icon(Icons.people), text: 'Personale'),
               Tab(icon: Icon(Icons.person_pin), text: 'Chi è Timbrato'),
@@ -290,11 +290,18 @@ class SettingsTab extends StatefulWidget {
 class _SettingsTabState extends State<SettingsTab> {
   double _minGpsAccuracy = 75.0; // Valore predefinito 75%
   bool _isLoading = true;
+  bool _autoBackupEnabled = false;
+  int _autoBackupDays = 7;
+  String? _lastBackupDate;
+  List<Map<String, dynamic>> _backups = [];
+  bool _loadingBackup = false;
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    _loadBackupSettings();
+    _loadBackupList();
   }
 
   Future<void> _loadSettings() async {
@@ -317,6 +324,165 @@ class _SettingsTabState extends State<SettingsTab> {
         backgroundColor: Colors.green,
       ),
     );
+  }
+
+  Future<void> _loadBackupSettings() async {
+    final settings = await ApiService.getBackupSettings();
+    if (settings != null && mounted) {
+      setState(() {
+        _autoBackupEnabled = settings['autoBackupEnabled'] ?? false;
+        _autoBackupDays = settings['autoBackupDays'] ?? 7;
+        _lastBackupDate = settings['lastBackupDate'];
+      });
+    }
+  }
+
+  Future<void> _loadBackupList() async {
+    final backups = await ApiService.listBackups();
+    if (mounted) {
+      setState(() => _backups = backups);
+    }
+  }
+
+  Future<void> _saveBackupSettings() async {
+    final success = await ApiService.saveBackupSettings(
+      autoBackupEnabled: _autoBackupEnabled,
+      autoBackupDays: _autoBackupDays,
+    );
+    
+    if (!mounted) return;
+    if (success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Impostazioni backup salvate'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  Future<void> _createBackupNow() async {
+    setState(() => _loadingBackup = true);
+    
+    final result = await ApiService.createBackup();
+    
+    if (!mounted) return;
+    setState(() => _loadingBackup = false);
+    
+    if (result != null && result['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Backup creato con successo!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      _loadBackupSettings();
+      _loadBackupList();
+      
+      // Chiedi se vuole scaricare
+      _askDownloadBackup(result['backup']['fileName']);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Errore durante la creazione del backup'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _askDownloadBackup(String fileName) async {
+    final download = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.download, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Backup creato'),
+          ],
+        ),
+        content: Text(
+          'Il backup è stato salvato sul server.\n\n'
+          'Vuoi scaricare una copia locale per conservarla in un luogo sicuro?'
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('NO'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('SÌ, SCARICA'),
+          ),
+        ],
+      ),
+    );
+
+    if (download == true) {
+      _downloadBackup(fileName);
+    }
+  }
+
+  Future<void> _downloadBackup(String fileName) async {
+    setState(() => _loadingBackup = true);
+    
+    final filePath = await ApiService.downloadBackup(fileName);
+    
+    if (!mounted) return;
+    setState(() => _loadingBackup = false);
+    
+    if (filePath != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Backup scaricato in:\n$filePath'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Errore durante il download del backup'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _deleteBackup(String fileName) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Conferma eliminazione'),
+        content: Text('Vuoi eliminare il backup "$fileName"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Annulla'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Elimina'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      final success = await ApiService.deleteBackup(fileName);
+      if (success) {
+        _loadBackupList();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Backup eliminato'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -428,8 +594,243 @@ class _SettingsTabState extends State<SettingsTab> {
             ),
           ),
         ),
+        const SizedBox(height: 16),
+        // Sezione Backup Database
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.backup, color: Colors.purple[700]),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Backup Database',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Proteggi i tuoi dati con backup automatici o manuali',
+                  style: TextStyle(color: Colors.grey[600]),
+                ),
+                const SizedBox(height: 24),
+                // Backup automatico
+                SwitchListTile(
+                  title: const Text('Backup Automatico'),
+                  subtitle: Text(_autoBackupEnabled 
+                      ? 'Attivo - ogni $_autoBackupDays giorni'
+                      : 'Disattivato'),
+                  value: _autoBackupEnabled,
+                  onChanged: (value) {
+                    setState(() => _autoBackupEnabled = value);
+                    _saveBackupSettings();
+                  },
+                ),
+                if (_autoBackupEnabled) ...[
+                  const SizedBox(height: 16),
+                  Text(
+                    'Frequenza backup automatico:',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey[700],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('3 giorni'),
+                        selected: _autoBackupDays == 3,
+                        onSelected: (selected) {
+                          if (selected) {
+                            setState(() => _autoBackupDays = 3);
+                            _saveBackupSettings();
+                          }
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('7 giorni'),
+                        selected: _autoBackupDays == 7,
+                        onSelected: (selected) {
+                          if (selected) {
+                            setState(() => _autoBackupDays = 7);
+                            _saveBackupSettings();
+                          }
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('15 giorni'),
+                        selected: _autoBackupDays == 15,
+                        onSelected: (selected) {
+                          if (selected) {
+                            setState(() => _autoBackupDays = 15);
+                            _saveBackupSettings();
+                          }
+                        },
+                      ),
+                      ChoiceChip(
+                        label: const Text('30 giorni'),
+                        selected: _autoBackupDays == 30,
+                        onSelected: (selected) {
+                          if (selected) {
+                            setState(() => _autoBackupDays = 30);
+                            _saveBackupSettings();
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                  if (_lastBackupDate != null) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.green[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.green[200]!),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.check_circle, color: Colors.green[700], size: 16),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Ultimo backup: ${_formatDate(_lastBackupDate!)}',
+                              style: TextStyle(
+                                color: Colors.green[900],
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+                const SizedBox(height: 24),
+                // Backup manuale
+                ElevatedButton.icon(
+                  onPressed: _loadingBackup ? null : _createBackupNow,
+                  icon: _loadingBackup 
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.save),
+                  label: Text(_loadingBackup ? 'Creazione in corso...' : 'Crea Backup Ora'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.purple,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(double.infinity, 48),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const Divider(),
+                const SizedBox(height: 16),
+                // Lista backup esistenti
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Backup Esistenti',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.refresh),
+                      onPressed: _loadBackupList,
+                      tooltip: 'Aggiorna lista',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (_backups.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        'Nessun backup disponibile',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ),
+                  )
+                else
+                  ..._backups.take(5).map((backup) => Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: ListTile(
+                      leading: const Icon(Icons.storage, color: Colors.purple),
+                      title: Text(
+                        backup['fileName'],
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      subtitle: Text(
+                        '${_formatFileSize(backup['size'])} - ${_formatDate(backup['createdAt'])}',
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.download, size: 20),
+                            onPressed: () => _downloadBackup(backup['fileName']),
+                            tooltip: 'Scarica',
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete, size: 20, color: Colors.red),
+                            onPressed: () => _deleteBackup(backup['fileName']),
+                            tooltip: 'Elimina',
+                          ),
+                        ],
+                      ),
+                    ),
+                  )),
+                if (_backups.length > 5)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Center(
+                      child: Text(
+                        'E altri ${_backups.length - 5} backup...',
+                        style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
       ],
     );
+  }
+
+  String _formatDate(String isoDate) {
+    final date = DateTime.parse(isoDate);
+    final now = DateTime.now();
+    final diff = now.difference(date);
+    
+    if (diff.inDays == 0) {
+      return 'Oggi alle ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+    } else if (diff.inDays == 1) {
+      return 'Ieri alle ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+    } else if (diff.inDays < 7) {
+      return '${diff.inDays} giorni fa';
+    } else {
+      return '${date.day}/${date.month}/${date.year}';
+    }
+  }
+
+  String _formatFileSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
 }
 

@@ -439,6 +439,216 @@ app.get('/api/attendance/report', async (req, res) => {
   }
 });
 
+// ==================== BACKUP DATABASE ====================
+
+// Directory per i backup
+const backupDir = path.join(__dirname, 'backups');
+if (!fs.existsSync(backupDir)) {
+  fs.mkdirSync(backupDir);
+}
+
+// File per le impostazioni di backup
+const backupSettingsFile = path.join(__dirname, 'backup_settings.json');
+
+// Carica impostazioni backup
+function loadBackupSettings() {
+  try {
+    if (fs.existsSync(backupSettingsFile)) {
+      return JSON.parse(fs.readFileSync(backupSettingsFile, 'utf8'));
+    }
+  } catch (error) {
+    console.error('Error loading backup settings:', error);
+  }
+  return {
+    autoBackupEnabled: false,
+    autoBackupDays: 7,
+    lastBackupDate: null
+  };
+}
+
+// Salva impostazioni backup
+function saveBackupSettings(settings) {
+  try {
+    fs.writeFileSync(backupSettingsFile, JSON.stringify(settings, null, 2));
+    return true;
+  } catch (error) {
+    console.error('Error saving backup settings:', error);
+    return false;
+  }
+}
+
+// Funzione per creare backup
+async function createDatabaseBackup() {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+  const backupFileName = `database_backup_${timestamp}.db`;
+  const backupPath = path.join(backupDir, backupFileName);
+  const dbPath = path.join(__dirname, 'database.db');
+  
+  return new Promise((resolve, reject) => {
+    // Copia il file database
+    fs.copyFile(dbPath, backupPath, (err) => {
+      if (err) {
+        reject(err);
+      } else {
+        console.log(`✓ Database backup created: ${backupFileName}`);
+        resolve({
+          fileName: backupFileName,
+          filePath: backupPath,
+          size: fs.statSync(backupPath).size,
+          timestamp: new Date().toISOString()
+        });
+      }
+    });
+  });
+}
+
+// GET - Impostazioni backup
+app.get('/api/backup/settings', (req, res) => {
+  const settings = loadBackupSettings();
+  res.json(settings);
+});
+
+// POST - Salva impostazioni backup
+app.post('/api/backup/settings', (req, res) => {
+  const { autoBackupEnabled, autoBackupDays } = req.body;
+  
+  const settings = {
+    autoBackupEnabled: autoBackupEnabled || false,
+    autoBackupDays: autoBackupDays || 7,
+    lastBackupDate: loadBackupSettings().lastBackupDate
+  };
+  
+  if (saveBackupSettings(settings)) {
+    res.json({ success: true, settings });
+  } else {
+    res.status(500).json({ error: 'Failed to save settings' });
+  }
+});
+
+// POST - Crea backup manuale
+app.post('/api/backup/create', async (req, res) => {
+  try {
+    const backupInfo = await createDatabaseBackup();
+    
+    // Aggiorna data ultimo backup
+    const settings = loadBackupSettings();
+    settings.lastBackupDate = backupInfo.timestamp;
+    saveBackupSettings(settings);
+    
+    res.json({
+      success: true,
+      backup: backupInfo
+    });
+  } catch (error) {
+    console.error('Error creating backup:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET - Lista backup esistenti
+app.get('/api/backup/list', (req, res) => {
+  try {
+    const files = fs.readdirSync(backupDir);
+    const backups = files
+      .filter(file => file.startsWith('database_backup_') && file.endsWith('.db'))
+      .map(file => {
+        const filePath = path.join(backupDir, file);
+        const stats = fs.statSync(filePath);
+        return {
+          fileName: file,
+          size: stats.size,
+          createdAt: stats.birthtime.toISOString()
+        };
+      })
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    
+    res.json(backups);
+  } catch (error) {
+    console.error('Error listing backups:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET - Scarica backup
+app.get('/api/backup/download/:fileName', (req, res) => {
+  try {
+    const fileName = req.params.fileName;
+    const filePath = path.join(backupDir, fileName);
+    
+    // Verifica che il file esista e sia nella directory corretta
+    if (!fs.existsSync(filePath) || !fileName.startsWith('database_backup_')) {
+      res.status(404).json({ error: 'Backup not found' });
+      return;
+    }
+    
+    res.download(filePath, fileName);
+  } catch (error) {
+    console.error('Error downloading backup:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE - Elimina backup
+app.delete('/api/backup/:fileName', (req, res) => {
+  try {
+    const fileName = req.params.fileName;
+    const filePath = path.join(backupDir, fileName);
+    
+    // Verifica che il file esista e sia nella directory corretta
+    if (!fs.existsSync(filePath) || !fileName.startsWith('database_backup_')) {
+      res.status(404).json({ error: 'Backup not found' });
+      return;
+    }
+    
+    fs.unlinkSync(filePath);
+    console.log(`✓ Backup deleted: ${fileName}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting backup:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Controllo automatico backup all'avvio e ogni 24 ore
+function checkAutoBackup() {
+  const settings = loadBackupSettings();
+  
+  if (!settings.autoBackupEnabled) {
+    return;
+  }
+  
+  const now = new Date();
+  const lastBackup = settings.lastBackupDate ? new Date(settings.lastBackupDate) : null;
+  
+  if (!lastBackup) {
+    // Nessun backup precedente, crealo
+    console.log('No previous backup found, creating one...');
+    createDatabaseBackup().then(backupInfo => {
+      settings.lastBackupDate = backupInfo.timestamp;
+      saveBackupSettings(settings);
+    }).catch(err => console.error('Auto-backup failed:', err));
+    return;
+  }
+  
+  const daysSinceLastBackup = (now - lastBackup) / (1000 * 60 * 60 * 24);
+  
+  if (daysSinceLastBackup >= settings.autoBackupDays) {
+    console.log(`Auto-backup triggered (${daysSinceLastBackup.toFixed(1)} days since last backup)`);
+    createDatabaseBackup().then(backupInfo => {
+      settings.lastBackupDate = backupInfo.timestamp;
+      saveBackupSettings(settings);
+    }).catch(err => console.error('Auto-backup failed:', err));
+  }
+}
+
+// Controlla backup all'avvio
+setTimeout(checkAutoBackup, 5000);
+
+// Controlla backup ogni 24 ore
+setInterval(checkAutoBackup, 24 * 60 * 60 * 1000);
+
+// ==================== END BACKUP ====================
+
 // Start server
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);

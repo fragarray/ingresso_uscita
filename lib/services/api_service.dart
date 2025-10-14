@@ -316,4 +316,97 @@ class ApiService {
       return null;
     }
   }
+
+  // ==================== BACKUP DATABASE ====================
+  
+  static Future<Map<String, dynamic>?> getBackupSettings() async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/backup/settings'));
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      return null;
+    } catch (e) {
+      print('Get backup settings error: $e');
+      return null;
+    }
+  }
+
+  static Future<bool> saveBackupSettings({
+    required bool autoBackupEnabled,
+    required int autoBackupDays,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/backup/settings'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'autoBackupEnabled': autoBackupEnabled,
+          'autoBackupDays': autoBackupDays,
+        }),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      print('Save backup settings error: $e');
+      return false;
+    }
+  }
+
+  static Future<Map<String, dynamic>?> createBackup() async {
+    try {
+      final response = await http.post(Uri.parse('$baseUrl/backup/create'));
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      return null;
+    } catch (e) {
+      print('Create backup error: $e');
+      return null;
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> listBackups() async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/backup/list'));
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        return data.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (e) {
+      print('List backups error: $e');
+      return [];
+    }
+  }
+
+  static Future<String?> downloadBackup(String fileName) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/backup/download/$fileName'),
+      );
+      if (response.statusCode == 200) {
+        final bytes = response.bodyBytes;
+        final dir = await getApplicationDocumentsDirectory();
+        final file = File('${dir.path}/$fileName');
+        await file.writeAsBytes(bytes);
+        return file.path;
+      }
+      return null;
+    } catch (e) {
+      print('Download backup error: $e');
+      return null;
+    }
+  }
+
+  static Future<bool> deleteBackup(String fileName) async {
+    try {
+      final response = await http.delete(
+        Uri.parse('$baseUrl/backup/$fileName'),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      print('Delete backup error: $e');
+      return false;
+    }
+  }
 }
