@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../widgets/personnel_tab.dart';
 import '../widgets/reports_tab.dart';
@@ -295,6 +297,11 @@ class _SettingsTabState extends State<SettingsTab> {
   String? _lastBackupDate;
   List<Map<String, dynamic>> _backups = [];
   bool _loadingBackup = false;
+  
+  // Server IP
+  final TextEditingController _serverIpController = TextEditingController();
+  String _currentServerIp = '192.168.1.2';
+  bool _testingConnection = false;
 
   @override
   void initState() {
@@ -302,6 +309,111 @@ class _SettingsTabState extends State<SettingsTab> {
     _loadSettings();
     _loadBackupSettings();
     _loadBackupList();
+    _loadServerIp();
+  }
+  
+  @override
+  void dispose() {
+    _serverIpController.dispose();
+    super.dispose();
+  }
+  
+  Future<void> _loadServerIp() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedIp = prefs.getString('serverIp') ?? '192.168.1.2';
+    setState(() {
+      _currentServerIp = savedIp;
+      _serverIpController.text = savedIp;
+    });
+  }
+
+  Future<void> _testAndSaveServerIp() async {
+    final newIp = _serverIpController.text.trim();
+    
+    if (newIp.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Inserisci un indirizzo IP valido'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    
+    setState(() {
+      _testingConnection = true;
+    });
+    
+    // Test connessione
+    final result = await ApiService.pingServer(newIp);
+    
+    setState(() {
+      _testingConnection = false;
+    });
+    
+    if (result['success'] == true) {
+      // Server valido, salva l'IP
+      await ApiService.setServerIp(newIp);
+      setState(() {
+        _currentServerIp = newIp;
+      });
+      
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.green),
+              SizedBox(width: 8),
+              Text('Connessione riuscita'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Server: ${result['message']}'),
+              const SizedBox(height: 8),
+              Text('Versione: ${result['version']}', style: const TextStyle(fontSize: 12)),
+              const SizedBox(height: 8),
+              const Text(
+                'L\'indirizzo IP del server è stato aggiornato.',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    } else {
+      // Errore di connessione
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.error, color: Colors.red),
+              SizedBox(width: 8),
+              Text('Connessione fallita'),
+            ],
+          ),
+          content: Text(result['error'] ?? 'Errore sconosciuto'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   Future<void> _loadSettings() async {
@@ -485,6 +597,185 @@ class _SettingsTabState extends State<SettingsTab> {
     }
   }
 
+  Future<void> _restoreFromBackup() async {
+    try {
+      // Usa file_picker per selezionare il file .db
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['db'],
+        dialogTitle: 'Seleziona file database (.db)',
+      );
+
+      if (result == null || result.files.isEmpty) {
+        return; // Utente ha annullato
+      }
+
+      final filePath = result.files.first.path;
+      if (filePath == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Errore: percorso file non valido'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      // Conferma restore
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('⚠️ Attenzione'),
+          content: const Text(
+            'Il ripristino del database sostituirà TUTTI i dati correnti.\n\n'
+            'Verrà creato un backup automatico del database corrente prima del ripristino.\n\n'
+            'Il server si riavvierà automaticamente.\n\n'
+            'Continuare?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Annulla'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Ripristina'),
+            ),
+          ],
+        ),
+      );
+
+      if (confirm != true) return;
+
+      // Mostra loading
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const AlertDialog(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Ripristino in corso...'),
+              SizedBox(height: 8),
+              Text(
+                'Non chiudere l\'applicazione',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      // Esegui restore
+      final response = await ApiService.restoreBackup(filePath);
+
+      if (!mounted) return;
+      Navigator.pop(context); // Chiudi loading dialog
+
+      if (response != null && response['success'] == true) {
+        // Successo - mostra messaggio e aspetta riavvio server
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.green),
+                SizedBox(width: 8),
+                Text('Ripristino completato'),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Database ripristinato con successo!'),
+                const SizedBox(height: 12),
+                Text(
+                  'Backup creato: ${response['backupCreated'] ?? 'N/A'}',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Il server si riavvierà automaticamente.\n'
+                  'L\'app tornerà alla schermata di login.',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+            actions: [
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  // Logout e torna alla login
+                  context.read<AppState>().logout();
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+
+        // Attendi qualche secondo per il riavvio del server
+        await Future.delayed(const Duration(seconds: 2));
+        
+        // Forza logout e refresh
+        if (!mounted) return;
+        context.read<AppState>().logout();
+        
+      } else {
+        // Errore
+        final errorMsg = response?['error'] ?? 'Errore sconosciuto durante il ripristino';
+        if (!mounted) return;
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.error, color: Colors.red),
+                SizedBox(width: 8),
+                Text('Errore'),
+              ],
+            ),
+            content: Text(errorMsg),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      // Chiudi loading dialog se aperto
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Errore'),
+          content: Text('Errore durante il ripristino: $e'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
@@ -494,6 +785,93 @@ class _SettingsTabState extends State<SettingsTab> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // Sezione Server IP
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.dns, color: Colors.purple[700]),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Indirizzo Server',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Configura l\'indirizzo IP del server. Il test di connessione verificherà che sia raggiungibile.',
+                  style: TextStyle(color: Colors.grey[600]),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _serverIpController,
+                        decoration: InputDecoration(
+                          labelText: 'Indirizzo IP',
+                          hintText: '192.168.1.2',
+                          border: const OutlineInputBorder(),
+                          prefixIcon: const Icon(Icons.computer),
+                          suffixText: ':3000',
+                        ),
+                        keyboardType: TextInputType.numberWithOptions(decimal: true),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton.icon(
+                      onPressed: _testingConnection ? null : _testAndSaveServerIp,
+                      icon: _testingConnection
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.check_circle),
+                      label: Text(_testingConnection ? 'Test...' : 'Testa e Salva'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.purple,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.purple[50],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.purple[200]!),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, size: 20, color: Colors.purple[700]),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'IP corrente: $_currentServerIp:3000',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.purple[900],
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
         // Sezione GPS
         Card(
           child: Padding(
@@ -726,6 +1104,18 @@ class _SettingsTabState extends State<SettingsTab> {
                   label: Text(_loadingBackup ? 'Creazione in corso...' : 'Crea Backup Ora'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.purple,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(double.infinity, 48),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // Restore da backup
+                ElevatedButton.icon(
+                  onPressed: _loadingBackup ? null : _restoreFromBackup,
+                  icon: const Icon(Icons.upload_file),
+                  label: const Text('Ripristina da Backup'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
                     foregroundColor: Colors.white,
                     minimumSize: const Size(double.infinity, 48),
                   ),

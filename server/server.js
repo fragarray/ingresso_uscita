@@ -3,6 +3,8 @@ const ExcelJS = require('exceljs');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const multer = require('multer');
+const sqlite3 = require('sqlite3').verbose();
 
 const app = express();
 const port = 3000;
@@ -19,6 +21,17 @@ app.use(express.json());
 
 // Mount routes
 app.use('/api/worksites', worksitesRoutes);
+
+// Server validation endpoint
+app.get('/api/ping', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Ingresso/Uscita Server',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    serverIdentity: 'ingresso-uscita-server'
+  });
+});
 
 // Insert default admin if not exists (after db initialization)
 setTimeout(() => {
@@ -648,6 +661,172 @@ setTimeout(checkAutoBackup, 5000);
 setInterval(checkAutoBackup, 24 * 60 * 60 * 1000);
 
 // ==================== END BACKUP ====================
+
+// ==================== RESTORE DATABASE ====================
+
+// Configurazione multer per upload file
+const upload = multer({
+  dest: path.join(__dirname, 'temp'),
+  fileFilter: (req, file, cb) => {
+    // Accetta solo file .db
+    if (file.originalname.endsWith('.db')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Solo file .db sono accettati'));
+    }
+  },
+  limits: {
+    fileSize: 100 * 1024 * 1024 // Max 100MB
+  }
+});
+
+// Crea directory temp se non esiste
+const tempDir = path.join(__dirname, 'temp');
+if (!fs.existsSync(tempDir)) {
+  fs.mkdirSync(tempDir);
+}
+
+// Valida struttura database
+function validateDatabaseStructure(dbPath) {
+  return new Promise((resolve, reject) => {
+    const testDb = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+      if (err) {
+        reject(new Error('File database corrotto o non valido'));
+        return;
+      }
+      
+      // Verifica esistenza tabelle richieste
+      const requiredTables = ['employees', 'work_sites', 'attendance'];
+      let checkedTables = 0;
+      
+      testDb.serialize(() => {
+        requiredTables.forEach(tableName => {
+          testDb.get(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            [tableName],
+            (err, row) => {
+              if (err) {
+                testDb.close();
+                reject(new Error(`Errore durante la validazione: ${err.message}`));
+                return;
+              }
+              
+              if (!row) {
+                testDb.close();
+                reject(new Error(`Tabella '${tableName}' mancante nel database`));
+                return;
+              }
+              
+              checkedTables++;
+              
+              if (checkedTables === requiredTables.length) {
+                // Verifica colonne critiche in employees
+                testDb.all("PRAGMA table_info(employees)", (err, columns) => {
+                  testDb.close();
+                  
+                  if (err) {
+                    reject(new Error(`Errore nella verifica colonne: ${err.message}`));
+                    return;
+                  }
+                  
+                  const columnNames = columns.map(col => col.name);
+                  const requiredColumns = ['id', 'name', 'email', 'password', 'isAdmin'];
+                  const missingColumns = requiredColumns.filter(col => !columnNames.includes(col));
+                  
+                  if (missingColumns.length > 0) {
+                    reject(new Error(`Colonne mancanti in 'employees': ${missingColumns.join(', ')}`));
+                    return;
+                  }
+                  
+                  resolve(true);
+                });
+              }
+            }
+          );
+        });
+      });
+    });
+  });
+}
+
+// POST endpoint per restore database
+app.post('/api/backup/restore', upload.single('database'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Nessun file caricato' });
+    }
+    
+    const uploadedFilePath = req.file.path;
+    const dbPath = path.join(__dirname, 'database.db');
+    const backupBeforeRestore = path.join(__dirname, 'backups', `pre_restore_backup_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)}.db`);
+    
+    console.log(`📤 Uploaded file: ${req.file.originalname}`);
+    console.log(`🔍 Validating database structure...`);
+    
+    // Valida struttura del database caricato
+    try {
+      await validateDatabaseStructure(uploadedFilePath);
+      console.log('✓ Database structure valid');
+    } catch (validationError) {
+      fs.unlinkSync(uploadedFilePath); // Elimina file non valido
+      return res.status(400).json({ error: validationError.message });
+    }
+    
+    // Crea backup del database corrente prima del restore
+    console.log('💾 Creating backup of current database...');
+    if (fs.existsSync(dbPath)) {
+      fs.copyFileSync(dbPath, backupBeforeRestore);
+      console.log(`✓ Current database backed up to: ${path.basename(backupBeforeRestore)}`);
+    }
+    
+    // Chiudi connessione corrente al database
+    console.log('🔌 Closing current database connection...');
+    await new Promise((resolve, reject) => {
+      db.close((err) => {
+        if (err) {
+          console.error('Error closing database:', err);
+          // Continua comunque
+        }
+        resolve();
+      });
+    });
+    
+    // Sostituisci il database
+    console.log('🔄 Replacing database...');
+    fs.copyFileSync(uploadedFilePath, dbPath);
+    
+    // Elimina file temporaneo
+    fs.unlinkSync(uploadedFilePath);
+    
+    console.log('✓ Database restored successfully');
+    console.log('🔄 Server will restart to apply changes...');
+    
+    // Invia risposta prima di riavviare
+    res.json({
+      success: true,
+      message: 'Database ripristinato con successo. Il server si riavvierà automaticamente.',
+      backupCreated: path.basename(backupBeforeRestore)
+    });
+    
+    // Riavvia il processo dopo un breve delay
+    setTimeout(() => {
+      console.log('🔄 Restarting server...');
+      process.exit(0); // Il process manager (nodemon/pm2) riavvierà automaticamente
+    }, 1000);
+    
+  } catch (error) {
+    console.error('❌ Error during restore:', error);
+    
+    // Pulisci file temporaneo se esiste
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== END RESTORE ====================
 
 // Start server
 app.listen(port, () => {

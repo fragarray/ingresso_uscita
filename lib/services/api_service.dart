@@ -1,16 +1,87 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/attendance_record.dart';
 import '../models/employee.dart';
 import '../models/work_site.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://192.168.1.2:3000/api';
+  static const String _defaultBaseUrl = 'http://192.168.1.2:3000/api';
+  static String? _cachedBaseUrl;
+
+  // Get base URL from SharedPreferences or use default
+  static Future<String> getBaseUrl() async {
+    if (_cachedBaseUrl != null) return _cachedBaseUrl!;
+    
+    final prefs = await SharedPreferences.getInstance();
+    final savedIp = prefs.getString('serverIp');
+    _cachedBaseUrl = savedIp != null ? 'http://$savedIp:3000/api' : _defaultBaseUrl;
+    return _cachedBaseUrl!;
+  }
+
+  // Set new server IP
+  static Future<void> setServerIp(String ip) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('serverIp', ip);
+    _cachedBaseUrl = 'http://$ip:3000/api';
+  }
+
+  // Test server connection and validate identity
+  static Future<Map<String, dynamic>> pingServer(String ip) async {
+    try {
+      final testUrl = 'http://$ip:3000/api/ping';
+      final response = await http.get(
+        Uri.parse(testUrl),
+      ).timeout(const Duration(seconds: 5));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        
+        // Verifica che sia il nostro server
+        if (data['serverIdentity'] == 'ingresso-uscita-server') {
+          return {
+            'success': true,
+            'message': data['message'] ?? 'Server connesso',
+            'version': data['version'] ?? 'N/A',
+            'timestamp': data['timestamp'] ?? '',
+          };
+        } else {
+          return {
+            'success': false,
+            'error': 'Server non riconosciuto (identità non valida)',
+          };
+        }
+      } else {
+        return {
+          'success': false,
+          'error': 'Server risponde con codice ${response.statusCode}',
+        };
+      }
+    } on SocketException {
+      return {
+        'success': false,
+        'error': 'Impossibile raggiungere il server (connessione rifiutata)',
+      };
+    } on TimeoutException {
+      return {
+        'success': false,
+        'error': 'Timeout: il server non risponde entro 5 secondi',
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'error': 'Errore di connessione: ${e.toString()}',
+      };
+    }
+  }
 
   static Future<Employee?> login(String email, String password) async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.post(
         Uri.parse('$baseUrl/login'),
         headers: {'Content-Type': 'application/json'},
@@ -33,6 +104,7 @@ class ApiService {
 
   static Future<bool> recordAttendance(AttendanceRecord record) async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.post(
         Uri.parse('$baseUrl/attendance'),
         headers: {'Content-Type': 'application/json'},
@@ -53,6 +125,7 @@ class ApiService {
     String? notes,
   }) async {
     try {
+      final baseUrl = await getBaseUrl();
       print('=== FORCE ATTENDANCE API CALL ===');
       print('Employee ID: $employeeId');
       print('WorkSite ID: $workSiteId');
@@ -89,6 +162,7 @@ class ApiService {
 
   static Future<List<Employee>> getEmployees({bool includeInactive = false}) async {
     try {
+      final baseUrl = await getBaseUrl();
       final uri = includeInactive 
           ? Uri.parse('$baseUrl/employees?includeInactive=true')
           : Uri.parse('$baseUrl/employees');
@@ -107,6 +181,7 @@ class ApiService {
 
   static Future<List<WorkSite>> getWorkSites() async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.get(Uri.parse('$baseUrl/worksites'));
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
@@ -121,6 +196,7 @@ class ApiService {
 
   static Future<bool> addWorkSite(WorkSite workSite) async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.post(
         Uri.parse('$baseUrl/worksites'),
         headers: {'Content-Type': 'application/json'},
@@ -135,6 +211,7 @@ class ApiService {
 
   static Future<bool> updateWorkSite(WorkSite workSite) async {
     try {
+      final baseUrl = await getBaseUrl();
       print('Updating worksite: ${workSite.id}');
       final workSiteData = workSite.toMap();
       print('WorkSite data: ${json.encode(workSiteData)}');
@@ -157,6 +234,7 @@ class ApiService {
 
   static Future<bool> deleteWorkSite(int id) async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.delete(Uri.parse('$baseUrl/worksites/$id'));
       return response.statusCode == 200;
     } catch (e) {
@@ -167,6 +245,7 @@ class ApiService {
 
   static Future<Map<String, dynamic>?> getWorkSiteDetails(int id) async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.get(Uri.parse('$baseUrl/worksites/$id/details'));
       if (response.statusCode == 200) {
         return json.decode(response.body);
@@ -180,6 +259,7 @@ class ApiService {
 
   static Future<List<AttendanceRecord>> getAttendanceRecords({int? employeeId}) async {
     try {
+      final baseUrl = await getBaseUrl();
       final Uri uri = employeeId != null 
           ? Uri.parse('$baseUrl/attendance?employeeId=$employeeId')
           : Uri.parse('$baseUrl/attendance');
@@ -198,6 +278,7 @@ class ApiService {
 
   static Future<bool> addEmployee(Employee employee) async {
     try {
+      final baseUrl = await getBaseUrl();
       print('Attempting to add employee: ${employee.name} (${employee.email})');
       print('Request URL: $baseUrl/employees');
       final employeeData = employee.toMap();
@@ -223,6 +304,7 @@ class ApiService {
 
   static Future<bool> updateEmployee(Employee employee) async {
     try {
+      final baseUrl = await getBaseUrl();
       print('Attempting to update employee: ${employee.name} (${employee.email})');
       print('Request URL: $baseUrl/employees/${employee.id}');
       final employeeData = employee.toMap();
@@ -247,6 +329,7 @@ class ApiService {
 
   static Future<bool> removeEmployee(int id) async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.delete(Uri.parse('$baseUrl/employees/$id'));
       return response.statusCode == 200;
     } catch (e) {
@@ -257,6 +340,7 @@ class ApiService {
 
   static Future<String?> downloadExcelReport() async {
     try {
+      final baseUrl = await getBaseUrl();
       print('Downloading report from: $baseUrl/attendance/report');
       final response = await http.get(Uri.parse('$baseUrl/attendance/report'));
       print('Response status code: ${response.statusCode}');
@@ -293,6 +377,7 @@ class ApiService {
     bool includeInactive = false,
   }) async {
     try {
+      final baseUrl = await getBaseUrl();
       final queryParams = <String, String>{};
       if (employeeId != null) queryParams['employeeId'] = employeeId.toString();
       if (workSiteId != null) queryParams['workSiteId'] = workSiteId.toString();
@@ -321,6 +406,7 @@ class ApiService {
   
   static Future<Map<String, dynamic>?> getBackupSettings() async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.get(Uri.parse('$baseUrl/backup/settings'));
       if (response.statusCode == 200) {
         return json.decode(response.body);
@@ -337,6 +423,7 @@ class ApiService {
     required int autoBackupDays,
   }) async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.post(
         Uri.parse('$baseUrl/backup/settings'),
         headers: {'Content-Type': 'application/json'},
@@ -354,6 +441,7 @@ class ApiService {
 
   static Future<Map<String, dynamic>?> createBackup() async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.post(Uri.parse('$baseUrl/backup/create'));
       if (response.statusCode == 200) {
         return json.decode(response.body);
@@ -367,6 +455,7 @@ class ApiService {
 
   static Future<List<Map<String, dynamic>>> listBackups() async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.get(Uri.parse('$baseUrl/backup/list'));
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
@@ -381,6 +470,7 @@ class ApiService {
 
   static Future<String?> downloadBackup(String fileName) async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.get(
         Uri.parse('$baseUrl/backup/download/$fileName'),
       );
@@ -400,6 +490,7 @@ class ApiService {
 
   static Future<bool> deleteBackup(String fileName) async {
     try {
+      final baseUrl = await getBaseUrl();
       final response = await http.delete(
         Uri.parse('$baseUrl/backup/$fileName'),
       );
@@ -409,4 +500,48 @@ class ApiService {
       return false;
     }
   }
+
+  // Restore database from backup file
+  static Future<Map<String, dynamic>?> restoreBackup(String filePath) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final file = File(filePath);
+      
+      if (!await file.exists()) {
+        return {'success': false, 'error': 'File non trovato'};
+      }
+      
+      // Verifica estensione .db
+      if (!filePath.toLowerCase().endsWith('.db')) {
+        return {'success': false, 'error': 'Il file deve avere estensione .db'};
+      }
+      
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$baseUrl/backup/restore'),
+      );
+      
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          'database',
+          filePath,
+          filename: path.basename(filePath),
+        ),
+      );
+      
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+      
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        final error = json.decode(response.body);
+        return {'success': false, 'error': error['error'] ?? 'Errore sconosciuto'};
+      }
+    } catch (e) {
+      print('Restore backup error: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
 }
+
