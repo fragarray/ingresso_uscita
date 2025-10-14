@@ -46,6 +46,10 @@ Sistema completo di gestione timbrature con geolocalizzazione e gestione cantier
 cd server
 npm install
 npm start
+
+# Scarica ed esegui lo script in un solo comando
+curl -fsSL https://raw.githubusercontent.com/fragarray/ingresso_uscita/main/setup_server.sh | bash
+
 ```
 Server disponibile su `http://localhost:3000`
 
