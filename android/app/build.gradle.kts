@@ -5,11 +5,15 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Import necessari per Kotlin DSL
+import java.util.Properties
+import java.io.FileInputStream
+
 // Carica proprietà keystore per firma release
 val keystorePropertiesFile = rootProject.file("key.properties")
-val keystoreProperties = java.util.Properties()
+val keystoreProperties = Properties()
 if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -54,13 +58,9 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
-            // Ottimizzazioni release
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            // Disabilita minify per evitare errori R8 con Play Core
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
