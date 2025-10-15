@@ -84,7 +84,7 @@ app.get('/api/attendance', (req, res) => {
         forcedByAdminId
       FROM attendance_records 
       WHERE employeeId = ? 
-      ORDER BY timestamp DESC, id DESC`
+      ORDER BY id DESC`
     : `SELECT 
         id,
         employeeId,
@@ -97,7 +97,7 @@ app.get('/api/attendance', (req, res) => {
         isForced,
         forcedByAdminId
       FROM attendance_records 
-      ORDER BY timestamp DESC, id DESC`;
+      ORDER BY id DESC`;
   const params = employeeId ? [employeeId] : [];
   
   db.all(query, params, (err, rows) => {
@@ -144,7 +144,7 @@ app.post('/api/attendance', (req, res) => {
 
 // Endpoint per timbratura forzata
 app.post('/api/attendance/force', (req, res) => {
-  const { employeeId, workSiteId, type, adminId, notes } = req.body;
+  const { employeeId, workSiteId, type, adminId, notes, timestamp } = req.body;
   
   if (!employeeId || !workSiteId || !type || !adminId) {
     res.status(400).json({ error: 'Missing required fields' });
@@ -169,10 +169,20 @@ app.post('/api/attendance/force', (req, res) => {
       deviceInfo += ` | Note: ${notes.trim()}`;
     }
     
-    // Crea timestamp in formato locale (non UTC) per consistenza con i record normali
-    // I record normali arrivano da Flutter con DateTime.now() che è locale
-    const now = new Date();
-    const localTimestamp = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().slice(0, -1);
+    // Determina il timestamp da usare
+    let finalTimestamp;
+    if (timestamp && timestamp.trim()) {
+      // Usa timestamp personalizzato fornito dall'admin
+      // Assume formato ISO 8601 (es: "2025-10-15T14:30:00.000")
+      finalTimestamp = timestamp;
+      console.log('Using custom timestamp:', finalTimestamp);
+    } else {
+      // Usa timestamp attuale in formato locale (non UTC) per consistenza con i record normali
+      // I record normali arrivano da Flutter con DateTime.now() che è locale
+      const now = new Date();
+      finalTimestamp = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().slice(0, -1);
+      console.log('Using current timestamp:', finalTimestamp);
+    }
     
     // Crea record di timbratura forzata
     db.run(`INSERT INTO attendance_records 
@@ -181,7 +191,7 @@ app.post('/api/attendance/force', (req, res) => {
       [
         employeeId,
         workSiteId,
-        localTimestamp,  // Usa timestamp locale invece di UTC
+        finalTimestamp,
         type,
         deviceInfo,
         0.0, // Latitude 0 per timbrature forzate
@@ -278,41 +288,9 @@ app.delete('/api/employees/:id', (req, res) => {
     });
 });
 
-// Funzione per aggiornare il report Excel
-const updateExcelReport = async (filters = {}) => {
+// ==================== NUOVO REPORT TIMBRATURE PROFESSIONALE ====================
+const generateAttendanceReport = async (filters = {}) => {
   const workbook = new ExcelJS.Workbook();
-  const worksheet = workbook.addWorksheet('Registro Presenze');
-
-  // Stile per l'intestazione
-  const headerStyle = {
-    font: { bold: true, color: { argb: 'FFFFFFFF' } },
-    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } },
-    alignment: { vertical: 'middle', horizontal: 'center' },
-    border: {
-      top: { style: 'thin' },
-      left: { style: 'thin' },
-      bottom: { style: 'thin' },
-      right: { style: 'thin' }
-    }
-  };
-
-  // Add headers
-  worksheet.columns = [
-    { header: 'Nome Dipendente', key: 'employeeName', width: 25 },
-    { header: 'Cantiere', key: 'workSiteName', width: 30 },
-    { header: 'Tipo', key: 'type', width: 12 },
-    { header: 'Data e Ora', key: 'timestamp', width: 20 },
-    { header: 'Dispositivo', key: 'deviceInfo', width: 35 },
-    { header: 'Latitudine', key: 'latitude', width: 15 },
-    { header: 'Longitudine', key: 'longitude', width: 15 },
-    { header: 'Google Maps', key: 'googleMaps', width: 20 },
-    { header: 'ID Dipendente', key: 'employeeId', width: 15 }
-  ];
-
-  // Applica lo stile all'intestazione
-  worksheet.getRow(1).eachCell((cell) => {
-    cell.style = headerStyle;
-  });
 
   return new Promise((resolve, reject) => {
     let query = `
@@ -364,27 +342,454 @@ const updateExcelReport = async (filters = {}) => {
     
     query += ' ORDER BY ar.timestamp DESC';
 
-    db.all(query, params, async (err, rows) => {
+    db.all(query, params, async (err, records) => {
       if (err) {
         reject(err);
         return;
       }
 
-      // Add rows to worksheet
-      rows.forEach(record => {
-        const row = worksheet.addRow({
+      if (records.length === 0) {
+        reject(new Error('Nessuna timbratura trovata per i filtri selezionati'));
+        return;
+      }
+
+      // ==================== CALCOLO STATISTICHE ====================
+      const stats = {
+        totalRecords: records.length,
+        totalIn: records.filter(r => r.type === 'in').length,
+        totalOut: records.filter(r => r.type === 'out').length,
+        uniqueEmployees: [...new Set(records.map(r => r.employeeId))],
+        uniqueWorkSites: [...new Set(records.map(r => r.workSiteId).filter(id => id !== null))],
+        uniqueDates: [...new Set(records.map(r => new Date(r.timestamp).toISOString().split('T')[0]))],
+        minDate: new Date(Math.min(...records.map(r => new Date(r.timestamp)))),
+        maxDate: new Date(Math.max(...records.map(r => new Date(r.timestamp))))
+      };
+
+      // Calcola ore lavorate per dipendente
+      const employeeStats = {};
+      stats.uniqueEmployees.forEach(empId => {
+        const empRecords = records.filter(r => r.employeeId === empId);
+        const empName = empRecords[0].employeeName;
+        const { workSessions } = calculateWorkedHours(empRecords);
+        
+        let totalHours = 0;
+        Object.values(workSessions).forEach(hours => totalHours += hours);
+        
+        const workSitesList = [...new Set(empRecords.map(r => r.workSiteName).filter(n => n))];
+        const datesList = [...new Set(empRecords.map(r => new Date(r.timestamp).toISOString().split('T')[0]))];
+        
+        employeeStats[empId] = {
+          name: empName,
+          totalRecords: empRecords.length,
+          totalHours: totalHours,
+          workSites: workSitesList,
+          daysWorked: datesList.length,
+          firstRecord: new Date(Math.min(...empRecords.map(r => new Date(r.timestamp)))),
+          lastRecord: new Date(Math.max(...empRecords.map(r => new Date(r.timestamp)))),
+          avgHoursPerDay: datesList.length > 0 ? totalHours / datesList.length : 0
+        };
+      });
+
+      // Calcola statistiche per cantiere
+      const workSiteStats = {};
+      stats.uniqueWorkSites.forEach(wsId => {
+        const wsRecords = records.filter(r => r.workSiteId === wsId);
+        const wsName = wsRecords[0]?.workSiteName || 'Non specificato';
+        const { workSessions } = calculateWorkedHours(wsRecords);
+        
+        let totalHours = 0;
+        Object.values(workSessions).forEach(hours => totalHours += hours);
+        
+        const empList = [...new Set(wsRecords.map(r => r.employeeId))];
+        const datesList = [...new Set(wsRecords.map(r => new Date(r.timestamp).toISOString().split('T')[0]))];
+        
+        workSiteStats[wsId] = {
+          name: wsName,
+          totalRecords: wsRecords.length,
+          totalHours: totalHours,
+          uniqueEmployees: empList.length,
+          daysActive: datesList.length
+        };
+      });
+
+      // Ordina dipendenti per ore (per Top 3)
+      const sortedEmployees = Object.entries(employeeStats)
+        .sort(([, a], [, b]) => b.totalHours - a.totalHours);
+
+      // ==================== FOGLIO 1: RIEPILOGO GENERALE ====================
+      const summarySheet = workbook.addWorksheet('Riepilogo Generale');
+      
+      // Stili
+      const titleStyle = {
+        font: { bold: true, size: 16, color: { argb: 'FF1F4E78' } },
+        alignment: { vertical: 'middle', horizontal: 'center' }
+      };
+      
+      const headerStyle = {
+        font: { bold: true, color: { argb: 'FFFFFFFF' } },
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } },
+        alignment: { vertical: 'middle', horizontal: 'center' },
+        border: {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' }
+        }
+      };
+      
+      const statStyle = {
+        font: { size: 11 },
+        alignment: { vertical: 'middle', horizontal: 'left' },
+        border: {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' }
+        }
+      };
+
+      const totalStyle = {
+        font: { bold: true, size: 12 },
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } },
+        alignment: { vertical: 'middle', horizontal: 'left' },
+        border: {
+          top: { style: 'medium' },
+          left: { style: 'thin' },
+          bottom: { style: 'medium' },
+          right: { style: 'thin' }
+        }
+      };
+      
+      // Titolo
+      summarySheet.mergeCells('A1:D1');
+      const titleCell = summarySheet.getCell('A1');
+      titleCell.value = 'REPORT GENERALE TIMBRATURE';
+      titleCell.style = titleStyle;
+      
+      // Periodo
+      summarySheet.mergeCells('A2:D2');
+      const periodCell = summarySheet.getCell('A2');
+      periodCell.value = `Periodo: ${stats.minDate.toLocaleDateString('it-IT')} - ${stats.maxDate.toLocaleDateString('it-IT')}`;
+      periodCell.alignment = { horizontal: 'center' };
+      periodCell.font = { italic: true, size: 11 };
+      
+      summarySheet.addRow([]);
+      
+      // STATISTICHE GENERALI
+      summarySheet.addRow(['STATISTICHE GENERALI']).font = { bold: true, size: 12, color: { argb: 'FF1F4E78' } };
+      summarySheet.addRow([]);
+      
+      summarySheet.columns = [
+        { key: 'label', width: 35 },
+        { key: 'value', width: 20 }
+      ];
+      
+      const statsData = [
+        ['📊 Totale Timbrature', stats.totalRecords],
+        ['✅ Ingressi (IN)', stats.totalIn],
+        ['❌ Uscite (OUT)', stats.totalOut],
+        ['👥 Dipendenti Coinvolti', stats.uniqueEmployees.length],
+        ['🏗️ Cantieri Coinvolti', stats.uniqueWorkSites.length],
+        ['📅 Giorni con Timbrature', stats.uniqueDates.length]
+      ];
+      
+      statsData.forEach(([label, value]) => {
+        const row = summarySheet.addRow([label, value]);
+        row.eachCell(cell => {
+          cell.style = statStyle;
+          if (cell.col === 2) {
+            cell.alignment = { horizontal: 'center' };
+            cell.font = { bold: true };
+          }
+        });
+      });
+      
+      summarySheet.addRow([]);
+      summarySheet.addRow([]);
+      
+      // TABELLA ORE PER DIPENDENTE
+      summarySheet.addRow(['ORE LAVORATE PER DIPENDENTE']).font = { bold: true, size: 12, color: { argb: 'FF1F4E78' } };
+      summarySheet.addRow([]);
+      
+      summarySheet.columns = [
+        { key: 'employee', width: 30 },
+        { key: 'hours', width: 15 },
+        { key: 'days', width: 15 },
+        { key: 'avg', width: 20 }
+      ];
+      
+      const empHeaderRow = summarySheet.addRow(['Dipendente', 'Ore Totali', 'Giorni', 'Media Ore/Giorno']);
+      empHeaderRow.eachCell(cell => cell.style = headerStyle);
+      
+      let grandTotalHours = 0;
+      sortedEmployees.forEach(([empId, stat]) => {
+        grandTotalHours += stat.totalHours;
+        const formatted = formatHoursMinutes(stat.totalHours);
+        const avgFormatted = formatHoursMinutes(stat.avgHoursPerDay);
+        
+        const row = summarySheet.addRow([
+          stat.name,
+          formatted.formatted,
+          stat.daysWorked,
+          avgFormatted.formatted
+        ]);
+        
+        row.eachCell((cell, colNumber) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+          if (colNumber >= 2) {
+            cell.alignment = { horizontal: 'center' };
+          }
+        });
+      });
+      
+      // TOTALE GENERALE
+      summarySheet.addRow([]);
+      const totalFormatted = formatHoursMinutes(grandTotalHours);
+      const totalRow = summarySheet.addRow(['TOTALE GENERALE', totalFormatted.formatted, '', '']);
+      totalRow.eachCell(cell => cell.style = totalStyle);
+
+      // ==================== FOGLIO 2: DETTAGLIO GIORNALIERO ====================
+      const dailySheet = workbook.addWorksheet('Dettaglio Giornaliero');
+      
+      dailySheet.columns = [
+        { key: 'date', width: 15 },
+        { key: 'employee', width: 25 },
+        { key: 'worksite', width: 30 },
+        { key: 'timeIn', width: 12 },
+        { key: 'timeOut', width: 12 },
+        { key: 'hours', width: 15 }
+      ];
+      
+      // Titolo
+      dailySheet.mergeCells('A1:F1');
+      const dailyTitleCell = dailySheet.getCell('A1');
+      dailyTitleCell.value = 'DETTAGLIO GIORNALIERO SESSIONI LAVORO';
+      dailyTitleCell.style = titleStyle;
+      dailySheet.addRow([]);
+      
+      const dailyHeaderRow = dailySheet.addRow(['Data', 'Dipendente', 'Cantiere', 'Ingresso', 'Uscita', 'Ore Lavorate']);
+      dailyHeaderRow.eachCell(cell => cell.style = headerStyle);
+      
+      // Raggruppa per data
+      const recordsByDate = {};
+      records.forEach(rec => {
+        const dateKey = new Date(rec.timestamp).toISOString().split('T')[0];
+        if (!recordsByDate[dateKey]) recordsByDate[dateKey] = [];
+        recordsByDate[dateKey].push(rec);
+      });
+      
+      // Ordina date
+      const sortedDates = Object.keys(recordsByDate).sort().reverse();
+      
+      sortedDates.forEach(dateKey => {
+        const dateRecords = recordsByDate[dateKey];
+        const { dailySessions } = calculateWorkedHours(dateRecords);
+        
+        let dailyTotal = 0;
+        
+        Object.entries(dailySessions).forEach(([employeeName, sessions]) => {
+          sessions.forEach(session => {
+            const row = dailySheet.addRow([
+              new Date(dateKey).toLocaleDateString('it-IT'),
+              employeeName,
+              session.workSite,
+              new Date(session.timeIn).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
+              new Date(session.timeOut).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
+              formatHoursMinutes(session.hours).formatted
+            ]);
+            
+            dailyTotal += session.hours;
+            
+            row.eachCell((cell, colNumber) => {
+              cell.border = {
+                top: { style: 'thin' },
+                left: { style: 'thin' },
+                bottom: { style: 'thin' },
+                right: { style: 'thin' }
+              };
+              if (colNumber >= 4) {
+                cell.alignment = { horizontal: 'center' };
+              }
+            });
+          });
+        });
+        
+        // Totale giornaliero
+        const dayTotalRow = dailySheet.addRow([
+          '',
+          '',
+          '',
+          '',
+          'Totale Giorno:',
+          formatHoursMinutes(dailyTotal).formatted
+        ]);
+        dayTotalRow.eachCell(cell => {
+          cell.font = { bold: true };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCE6F1' } };
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+        });
+        
+        dailySheet.addRow([]); // Riga vuota tra giorni
+      });
+
+      // ==================== FOGLIO 3: RIEPILOGO DIPENDENTI ====================
+      const employeesSheet = workbook.addWorksheet('Riepilogo Dipendenti');
+      
+      employeesSheet.columns = [
+        { key: 'rank', width: 8 },
+        { key: 'name', width: 30 },
+        { key: 'hours', width: 15 },
+        { key: 'days', width: 12 },
+        { key: 'avg', width: 18 },
+        { key: 'worksites', width: 35 }
+      ];
+      
+      // Titolo
+      employeesSheet.mergeCells('A1:F1');
+      const empTitleCell = employeesSheet.getCell('A1');
+      empTitleCell.value = 'RIEPILOGO DIPENDENTI - CLASSIFICA ORE LAVORATE';
+      empTitleCell.style = titleStyle;
+      employeesSheet.addRow([]);
+      
+      const empSheetHeaderRow = employeesSheet.addRow(['#', 'Dipendente', 'Ore Totali', 'Giorni', 'Media/Giorno', 'Cantieri Visitati']);
+      empSheetHeaderRow.eachCell(cell => cell.style = headerStyle);
+      
+      sortedEmployees.forEach(([empId, stat], index) => {
+        const formatted = formatHoursMinutes(stat.totalHours);
+        const avgFormatted = formatHoursMinutes(stat.avgHoursPerDay);
+        
+        const row = employeesSheet.addRow([
+          index + 1,
+          stat.name,
+          formatted.formatted,
+          stat.daysWorked,
+          avgFormatted.formatted,
+          stat.workSites.join(', ')
+        ]);
+        
+        // Top 3 colorati
+        if (index === 0) {
+          row.eachCell(cell => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFD700' } }; // Oro
+            cell.font = { bold: true };
+          });
+        } else if (index === 1) {
+          row.eachCell(cell => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC0C0C0' } }; // Argento
+            cell.font = { bold: true };
+          });
+        } else if (index === 2) {
+          row.eachCell(cell => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFCD7F32' } }; // Bronzo
+            cell.font = { bold: true };
+          });
+        }
+        
+        row.eachCell((cell, colNumber) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+          if (colNumber === 1 || colNumber >= 3 && colNumber <= 5) {
+            cell.alignment = { horizontal: 'center' };
+          }
+        });
+      });
+
+      // ==================== FOGLIO 4: RIEPILOGO CANTIERI ====================
+      const worksitesSheet = workbook.addWorksheet('Riepilogo Cantieri');
+      
+      worksitesSheet.columns = [
+        { key: 'name', width: 35 },
+        { key: 'employees', width: 18 },
+        { key: 'days', width: 15 },
+        { key: 'hours', width: 15 },
+        { key: 'records', width: 18 }
+      ];
+      
+      // Titolo
+      worksitesSheet.mergeCells('A1:E1');
+      const wsTitleCell = worksitesSheet.getCell('A1');
+      wsTitleCell.value = 'RIEPILOGO CANTIERI';
+      wsTitleCell.style = titleStyle;
+      worksitesSheet.addRow([]);
+      
+      const wsHeaderRow = worksitesSheet.addRow(['Cantiere', 'Dipendenti Unici', 'Giorni Attività', 'Ore Totali', 'Timbrature']);
+      wsHeaderRow.eachCell(cell => cell.style = headerStyle);
+      
+      // Ordina cantieri per ore
+      const sortedWorksites = Object.entries(workSiteStats)
+        .sort(([, a], [, b]) => b.totalHours - a.totalHours);
+      
+      sortedWorksites.forEach(([wsId, stat]) => {
+        const formatted = formatHoursMinutes(stat.totalHours);
+        
+        const row = worksitesSheet.addRow([
+          stat.name,
+          stat.uniqueEmployees,
+          stat.daysActive,
+          formatted.formatted,
+          stat.totalRecords
+        ]);
+        
+        row.eachCell((cell, colNumber) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+          if (colNumber >= 2) {
+            cell.alignment = { horizontal: 'center' };
+          }
+        });
+      });
+
+      // ==================== FOGLIO 5: TIMBRATURE COMPLETE ====================
+      const detailSheet = workbook.addWorksheet('Timbrature Complete');
+      
+      detailSheet.columns = [
+        { key: 'employeeName', width: 25 },
+        { key: 'workSiteName', width: 30 },
+        { key: 'type', width: 12 },
+        { key: 'timestamp', width: 20 },
+        { key: 'deviceInfo', width: 35 },
+        { key: 'googleMaps', width: 20 }
+      ];
+      
+      // Titolo
+      detailSheet.mergeCells('A1:F1');
+      const detailTitleCell = detailSheet.getCell('A1');
+      detailTitleCell.value = 'LISTA COMPLETA TIMBRATURE';
+      detailTitleCell.style = titleStyle;
+      detailSheet.addRow([]);
+      
+      const detailHeaderRow = detailSheet.addRow(['Dipendente', 'Cantiere', 'Tipo', 'Data e Ora', 'Dispositivo', 'Google Maps']);
+      detailHeaderRow.eachCell(cell => cell.style = headerStyle);
+      
+      records.forEach(record => {
+        const row = detailSheet.addRow({
           employeeName: record.employeeName,
           workSiteName: record.workSiteName || 'Non specificato',
           type: record.type === 'in' ? 'Ingresso' : 'Uscita',
           timestamp: new Date(record.timestamp).toLocaleString('it-IT'),
           deviceInfo: record.deviceInfo,
-          latitude: record.latitude ? record.latitude.toFixed(6) : 'N/D',
-          longitude: record.longitude ? record.longitude.toFixed(6) : 'N/D',
-          googleMaps: (record.latitude && record.longitude) ? 'Apri in Maps' : 'N/D',
-          employeeId: record.employeeId
+          googleMaps: (record.latitude && record.longitude) ? 'Apri in Maps' : 'N/D'
         });
 
-        // Aggiungi link a Google Maps se coordinate disponibili
+        // Link Google Maps
         if (record.latitude && record.longitude) {
           const mapsUrl = `https://www.google.com/maps?q=${record.latitude},${record.longitude}`;
           const mapsCell = row.getCell('googleMaps');
@@ -395,7 +800,7 @@ const updateExcelReport = async (filters = {}) => {
           mapsCell.font = { color: { argb: 'FF0563C1' }, underline: true };
         }
 
-        // Colora le righe in base al tipo
+        // Colora le righe
         row.eachCell((cell, colNumber) => {
           if (colNumber === 3) { // Colonna Tipo
             cell.font = { 
@@ -413,25 +818,30 @@ const updateExcelReport = async (filters = {}) => {
       });
 
       // Aggiungi filtri automatici
-      worksheet.autoFilter = {
-        from: 'A1',
-        to: `I1`
+      detailSheet.autoFilter = {
+        from: 'A3',
+        to: 'F3'
       };
 
+      // ==================== SALVA FILE ====================
       const reportPath = path.join(__dirname, 'reports');
       if (!fs.existsSync(reportPath)) {
         fs.mkdirSync(reportPath);
       }
 
-      const timestamp = filters.employeeId || filters.workSiteId || filters.startDate || filters.endDate
-        ? `_${Date.now()}`
-        : '';
-      const filePath = path.join(reportPath, `attendance_report${timestamp}.xlsx`);
+      const timestamp = Date.now();
+      const filePath = path.join(reportPath, `attendance_report_${timestamp}.xlsx`);
       
       await workbook.xlsx.writeFile(filePath);
       resolve(filePath);
     });
   });
+};
+
+// Funzione legacy per retrocompatibilità (deprecata)
+const updateExcelReport = async (filters = {}) => {
+  // Redirige alla nuova funzione professionale
+  return generateAttendanceReport(filters);
 };
 
 // Endpoint per scaricare il report
@@ -448,6 +858,885 @@ app.get('/api/attendance/report', async (req, res) => {
     res.download(filePath);
   } catch (error) {
     console.error('Error generating report:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== REPORT ORE DIPENDENTE ====================
+
+// Funzione per calcolare le ore lavorate da coppie di timbrature
+const calculateWorkedHours = (records) => {
+  const workSessions = {};
+  const dailySessions = {};
+  
+  // Ordina per timestamp
+  records.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  
+  let lastIn = null;
+  
+  records.forEach(record => {
+    if (record.type === 'in') {
+      lastIn = record;
+    } else if (record.type === 'out' && lastIn) {
+      const timeIn = new Date(lastIn.timestamp);
+      const timeOut = new Date(record.timestamp);
+      const hoursWorked = (timeOut - timeIn) / (1000 * 60 * 60); // in ore
+      
+      const workSiteName = record.workSiteName || 'Non specificato';
+      const dateKey = timeIn.toISOString().split('T')[0]; // YYYY-MM-DD
+      
+      // Accumula per cantiere
+      if (!workSessions[workSiteName]) {
+        workSessions[workSiteName] = 0;
+      }
+      workSessions[workSiteName] += hoursWorked;
+      
+      // Accumula per giorno
+      if (!dailySessions[dateKey]) {
+        dailySessions[dateKey] = [];
+      }
+      dailySessions[dateKey].push({
+        workSite: workSiteName,
+        timeIn: timeIn,
+        timeOut: timeOut,
+        hours: hoursWorked
+      });
+      
+      lastIn = null;
+    }
+  });
+  
+  return { workSessions, dailySessions };
+};
+
+// Funzione per formattare ore e minuti
+const formatHoursMinutes = (totalHours) => {
+  const hours = Math.floor(totalHours);
+  const minutes = Math.round((totalHours - hours) * 60);
+  return { hours, minutes, formatted: `${hours}h ${minutes}m` };
+};
+
+// Funzione per generare report ore dipendente
+const generateEmployeeHoursReport = async (employeeId, startDate, endDate) => {
+  const workbook = new ExcelJS.Workbook();
+  
+  return new Promise((resolve, reject) => {
+    let query = `
+      SELECT 
+        ar.id,
+        ar.employeeId,
+        ar.workSiteId,
+        ar.timestamp,
+        ar.type,
+        ar.deviceInfo,
+        ar.latitude,
+        ar.longitude,
+        e.name as employeeName,
+        ws.name as workSiteName
+      FROM attendance_records ar
+      JOIN employees e ON ar.employeeId = e.id
+      LEFT JOIN work_sites ws ON ar.workSiteId = ws.id
+      WHERE ar.employeeId = ?
+    `;
+    
+    const params = [employeeId];
+    
+    if (startDate) {
+      query += ' AND ar.timestamp >= ?';
+      params.push(startDate);
+    }
+    
+    if (endDate) {
+      query += ' AND ar.timestamp <= ?';
+      params.push(endDate);
+    }
+    
+    query += ' ORDER BY ar.timestamp ASC';
+
+    db.all(query, params, async (err, records) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      if (records.length === 0) {
+        reject(new Error('Nessuna timbratura trovata per il periodo selezionato'));
+        return;
+      }
+
+      const employeeName = records[0].employeeName;
+      const { workSessions, dailySessions } = calculateWorkedHours(records);
+      
+      // ==================== FOGLIO 1: RIEPILOGO ====================
+      const summarySheet = workbook.addWorksheet('Riepilogo Ore');
+      
+      // Stili
+      const titleStyle = {
+        font: { bold: true, size: 16, color: { argb: 'FF1F4E78' } },
+        alignment: { vertical: 'middle', horizontal: 'center' }
+      };
+      
+      const headerStyle = {
+        font: { bold: true, color: { argb: 'FFFFFFFF' } },
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } },
+        alignment: { vertical: 'middle', horizontal: 'center' },
+        border: {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' }
+        }
+      };
+      
+      const totalStyle = {
+        font: { bold: true, size: 12 },
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } },
+        alignment: { vertical: 'middle', horizontal: 'left' },
+        border: {
+          top: { style: 'medium' },
+          left: { style: 'thin' },
+          bottom: { style: 'medium' },
+          right: { style: 'thin' }
+        }
+      };
+      
+      // Titolo
+      summarySheet.mergeCells('A1:D1');
+      const titleCell = summarySheet.getCell('A1');
+      titleCell.value = `REPORT ORE LAVORATE - ${employeeName}`;
+      titleCell.style = titleStyle;
+      
+      // Periodo
+      summarySheet.mergeCells('A2:D2');
+      const periodCell = summarySheet.getCell('A2');
+      const startDateStr = startDate ? new Date(startDate).toLocaleDateString('it-IT') : 'Inizio';
+      const endDateStr = endDate ? new Date(endDate).toLocaleDateString('it-IT') : 'Oggi';
+      periodCell.value = `Periodo: ${startDateStr} - ${endDateStr}`;
+      periodCell.alignment = { horizontal: 'center' };
+      periodCell.font = { italic: true, size: 11 };
+      
+      summarySheet.addRow([]);
+      
+      // Sezione: ORE PER CANTIERE
+      summarySheet.addRow(['ORE LAVORATE PER CANTIERE']).font = { bold: true, size: 12 };
+      summarySheet.addRow([]);
+      
+      summarySheet.columns = [
+        { key: 'workSite', width: 35 },
+        { key: 'hours', width: 12 },
+        { key: 'minutes', width: 12 },
+        { key: 'total', width: 20 }
+      ];
+      
+      const headerRow = summarySheet.addRow(['Cantiere', 'Ore', 'Minuti', 'Totale']);
+      headerRow.eachCell(cell => cell.style = headerStyle);
+      
+      let totalHours = 0;
+      Object.entries(workSessions).forEach(([workSite, hours]) => {
+        totalHours += hours;
+        const formatted = formatHoursMinutes(hours);
+        const row = summarySheet.addRow([
+          workSite,
+          formatted.hours,
+          formatted.minutes,
+          formatted.formatted
+        ]);
+        
+        row.eachCell((cell, colNumber) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+          if (colNumber >= 2) {
+            cell.alignment = { horizontal: 'center' };
+          }
+        });
+      });
+      
+      summarySheet.addRow([]);
+      
+      // TOTALE GENERALE
+      const totalFormatted = formatHoursMinutes(totalHours);
+      const totalRow = summarySheet.addRow([
+        'TOTALE ORE LAVORATE',
+        totalFormatted.hours,
+        totalFormatted.minutes,
+        totalFormatted.formatted
+      ]);
+      totalRow.eachCell(cell => cell.style = totalStyle);
+      
+      summarySheet.addRow([]);
+      
+      // STATISTICHE
+      const workDays = Object.keys(dailySessions).length;
+      const avgHoursPerDay = workDays > 0 ? totalHours / workDays : 0;
+      const avgFormatted = formatHoursMinutes(avgHoursPerDay);
+      
+      summarySheet.addRow(['STATISTICHE']).font = { bold: true, size: 12 };
+      summarySheet.addRow([]);
+      
+      const statsHeaderRow = summarySheet.addRow(['Metrica', 'Valore']);
+      statsHeaderRow.eachCell(cell => cell.style = headerStyle);
+      
+      const statsData = [
+        ['Giorni di lavoro', workDays],
+        ['Ore medie al giorno', avgFormatted.formatted],
+        ['Ore totali periodo', totalFormatted.formatted]
+      ];
+      
+      statsData.forEach(([label, value]) => {
+        const row = summarySheet.addRow([label, value]);
+        row.eachCell(cell => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+        });
+        row.getCell(2).alignment = { horizontal: 'center' };
+        row.getCell(1).font = { bold: true };
+      });
+      
+      // ==================== FOGLIO 2: DETTAGLIO GIORNALIERO ====================
+      const detailSheet = workbook.addWorksheet('Dettaglio Giornaliero');
+      
+      detailSheet.columns = [
+        { header: 'Data', key: 'date', width: 15 },
+        { header: 'Cantiere', key: 'workSite', width: 30 },
+        { header: 'Ora Ingresso', key: 'timeIn', width: 18 },
+        { header: 'Ora Uscita', key: 'timeOut', width: 18 },
+        { header: 'Ore Lavorate', key: 'hours', width: 15 },
+        { header: 'Totale Giorno', key: 'dailyTotal', width: 15 }
+      ];
+      
+      detailSheet.getRow(1).eachCell(cell => cell.style = headerStyle);
+      
+      // Ordina le date
+      const sortedDates = Object.keys(dailySessions).sort();
+      
+      sortedDates.forEach(dateKey => {
+        const sessions = dailySessions[dateKey];
+        const date = new Date(dateKey).toLocaleDateString('it-IT');
+        
+        let dailyTotal = 0;
+        sessions.forEach(session => {
+          dailyTotal += session.hours;
+        });
+        
+        const dailyFormatted = formatHoursMinutes(dailyTotal);
+        
+        sessions.forEach((session, index) => {
+          const sessionFormatted = formatHoursMinutes(session.hours);
+          const row = detailSheet.addRow({
+            date: index === 0 ? date : '',
+            workSite: session.workSite,
+            timeIn: session.timeIn.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
+            timeOut: session.timeOut.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
+            hours: sessionFormatted.formatted,
+            dailyTotal: index === 0 ? dailyFormatted.formatted : ''
+          });
+          
+          row.eachCell((cell, colNumber) => {
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+            
+            if (colNumber === 1 && index === 0) {
+              cell.font = { bold: true };
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+            }
+            
+            if (colNumber === 6 && index === 0) {
+              cell.font = { bold: true };
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+            }
+            
+            if (colNumber >= 3) {
+              cell.alignment = { horizontal: 'center' };
+            }
+          });
+        });
+        
+        // Riga separatore tra giorni
+        detailSheet.addRow([]);
+      });
+      
+      // ==================== FOGLIO 3: TIMBRATURE ORIGINALI ====================
+      const rawSheet = workbook.addWorksheet('Timbrature Originali');
+      
+      rawSheet.columns = [
+        { header: 'Data e Ora', key: 'timestamp', width: 20 },
+        { header: 'Tipo', key: 'type', width: 12 },
+        { header: 'Cantiere', key: 'workSite', width: 30 },
+        { header: 'Dispositivo', key: 'device', width: 35 }
+      ];
+      
+      rawSheet.getRow(1).eachCell(cell => cell.style = headerStyle);
+      
+      records.forEach(record => {
+        const row = rawSheet.addRow({
+          timestamp: new Date(record.timestamp).toLocaleString('it-IT'),
+          type: record.type === 'in' ? 'Ingresso' : 'Uscita',
+          workSite: record.workSiteName || 'Non specificato',
+          device: record.deviceInfo
+        });
+        
+        row.eachCell((cell, colNumber) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+          
+          if (colNumber === 2) {
+            cell.font = { 
+              bold: true, 
+              color: { argb: record.type === 'in' ? 'FF00B050' : 'FFE74C3C' }
+            };
+          }
+        });
+      });
+      
+      // Salva file
+      const reportPath = path.join(__dirname, 'reports');
+      if (!fs.existsSync(reportPath)) {
+        fs.mkdirSync(reportPath);
+      }
+
+      const timestamp = Date.now();
+      const filePath = path.join(reportPath, `ore_dipendente_${employeeId}_${timestamp}.xlsx`);
+      
+      await workbook.xlsx.writeFile(filePath);
+      resolve(filePath);
+    });
+  });
+};
+
+// Endpoint per scaricare il report ore dipendente
+app.get('/api/attendance/hours-report', async (req, res) => {
+  try {
+    const employeeId = req.query.employeeId;
+    
+    if (!employeeId) {
+      return res.status(400).json({ error: 'employeeId è obbligatorio per questo report' });
+    }
+    
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
+    
+    const filePath = await generateEmployeeHoursReport(employeeId, startDate, endDate);
+    res.download(filePath);
+  } catch (error) {
+    console.error('Error generating hours report:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== REPORT CANTIERE AVANZATO ====================
+
+// Funzione per generare report cantiere con statistiche
+const generateWorkSiteReport = async (workSiteId, employeeId, startDate, endDate) => {
+  const workbook = new ExcelJS.Workbook();
+  
+  return new Promise((resolve, reject) => {
+    // Query per ottenere info cantiere
+    const workSiteQuery = workSiteId 
+      ? 'SELECT * FROM work_sites WHERE id = ?'
+      : 'SELECT * FROM work_sites LIMIT 1'; // Placeholder per "tutti i cantieri"
+    
+    const workSiteParams = workSiteId ? [workSiteId] : [];
+    
+    db.get(workSiteQuery, workSiteParams, async (err, workSite) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      
+      // Query principale per timbrature
+      let query = `
+        SELECT 
+          ar.id,
+          ar.employeeId,
+          ar.workSiteId,
+          ar.timestamp,
+          ar.type,
+          ar.deviceInfo,
+          ar.latitude,
+          ar.longitude,
+          e.name as employeeName,
+          ws.name as workSiteName,
+          ws.address as workSiteAddress
+        FROM attendance_records ar
+        JOIN employees e ON ar.employeeId = e.id
+        LEFT JOIN work_sites ws ON ar.workSiteId = ws.id
+        WHERE 1=1
+      `;
+      
+      const params = [];
+      
+      if (workSiteId) {
+        query += ' AND ar.workSiteId = ?';
+        params.push(workSiteId);
+      }
+      
+      if (employeeId) {
+        query += ' AND ar.employeeId = ?';
+        params.push(employeeId);
+      }
+      
+      if (startDate) {
+        query += ' AND ar.timestamp >= ?';
+        params.push(startDate);
+      }
+      
+      if (endDate) {
+        query += ' AND ar.timestamp <= ?';
+        params.push(endDate);
+      }
+      
+      query += ' ORDER BY ar.timestamp ASC';
+
+      db.all(query, params, async (err, records) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        if (records.length === 0) {
+          reject(new Error('Nessuna timbratura trovata per il periodo selezionato'));
+          return;
+        }
+
+        // Calcola ore e statistiche
+        const { workSessions, dailySessions } = calculateWorkedHours(records);
+        
+        // Calcola statistiche cantiere
+        const uniqueEmployees = [...new Set(records.map(r => r.employeeId))];
+        const uniqueDates = [...new Set(records.map(r => new Date(r.timestamp).toISOString().split('T')[0]))];
+        
+        // Calcola ore totali
+        let totalHours = 0;
+        Object.values(workSessions).forEach(hours => totalHours += hours);
+        
+        const avgHoursPerDay = uniqueDates.length > 0 ? totalHours / uniqueDates.length : 0;
+        const avgHoursPerEmployee = uniqueEmployees.length > 0 ? totalHours / uniqueEmployees.length : 0;
+        
+        const workSiteName = workSiteId && workSite 
+          ? workSite.name 
+          : 'Tutti i Cantieri';
+        
+        // ==================== FOGLIO 1: RIEPILOGO CANTIERE ====================
+        const summarySheet = workbook.addWorksheet('Riepilogo Cantiere');
+        
+        // Stili
+        const titleStyle = {
+          font: { bold: true, size: 16, color: { argb: 'FF1F4E78' } },
+          alignment: { vertical: 'middle', horizontal: 'center' }
+        };
+        
+        const headerStyle = {
+          font: { bold: true, color: { argb: 'FFFFFFFF' } },
+          fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } },
+          alignment: { vertical: 'middle', horizontal: 'center' },
+          border: {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          }
+        };
+        
+        const totalStyle = {
+          font: { bold: true, size: 12 },
+          fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } },
+          alignment: { vertical: 'middle', horizontal: 'left' },
+          border: {
+            top: { style: 'medium' },
+            left: { style: 'thin' },
+            bottom: { style: 'medium' },
+            right: { style: 'thin' }
+          }
+        };
+        
+        const infoStyle = {
+          font: { size: 11 },
+          fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } },
+          alignment: { vertical: 'middle', horizontal: 'left' },
+          border: {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          }
+        };
+        
+        // Titolo
+        summarySheet.mergeCells('A1:D1');
+        const titleCell = summarySheet.getCell('A1');
+        titleCell.value = `REPORT CANTIERE - ${workSiteName.toUpperCase()}`;
+        titleCell.style = titleStyle;
+        
+        // Periodo
+        summarySheet.mergeCells('A2:D2');
+        const periodCell = summarySheet.getCell('A2');
+        const startDateStr = startDate ? new Date(startDate).toLocaleDateString('it-IT') : 'Inizio';
+        const endDateStr = endDate ? new Date(endDate).toLocaleDateString('it-IT') : 'Oggi';
+        periodCell.value = `Periodo: ${startDateStr} - ${endDateStr}`;
+        periodCell.alignment = { horizontal: 'center' };
+        periodCell.font = { italic: true, size: 11 };
+        
+        summarySheet.addRow([]);
+        
+        // INFO CANTIERE
+        if (workSiteId && workSite) {
+          summarySheet.addRow(['INFORMAZIONI CANTIERE']).font = { bold: true, size: 12 };
+          summarySheet.addRow([]);
+          
+          const infoRows = [
+            ['Nome Cantiere:', workSite.name],
+            ['Indirizzo:', workSite.address || 'Non specificato'],
+            ['Coordinate:', workSite.latitude && workSite.longitude 
+              ? `${workSite.latitude.toFixed(6)}, ${workSite.longitude.toFixed(6)}` 
+              : 'Non disponibili']
+          ];
+          
+          infoRows.forEach(([label, value]) => {
+            const row = summarySheet.addRow([label, value]);
+            row.getCell(1).font = { bold: true };
+            row.getCell(1).style = infoStyle;
+            row.getCell(2).style = infoStyle;
+          });
+          
+          summarySheet.addRow([]);
+        }
+        
+        // STATISTICHE PRINCIPALI
+        summarySheet.addRow(['STATISTICHE CANTIERE']).font = { bold: true, size: 12 };
+        summarySheet.addRow([]);
+        
+        summarySheet.columns = [
+          { key: 'label', width: 35 },
+          { key: 'value', width: 20 },
+          { key: 'label2', width: 35 },
+          { key: 'value2', width: 20 }
+        ];
+        
+        const statsHeaderRow = summarySheet.addRow(['Metrica', 'Valore', 'Metrica', 'Valore']);
+        statsHeaderRow.eachCell(cell => cell.style = headerStyle);
+        
+        const totalFormatted = formatHoursMinutes(totalHours);
+        const avgDayFormatted = formatHoursMinutes(avgHoursPerDay);
+        const avgEmpFormatted = formatHoursMinutes(avgHoursPerEmployee);
+        
+        const statsData = [
+          ['Dipendenti Totali', uniqueEmployees.length, 'Ore Totali Lavorate', totalFormatted.formatted],
+          ['Giorni di Apertura', uniqueDates.length, 'Media Ore per Giorno', avgDayFormatted.formatted],
+          ['Timbrature Totali', records.length, 'Media Ore per Dipendente', avgEmpFormatted.formatted]
+        ];
+        
+        statsData.forEach(([label1, value1, label2, value2]) => {
+          const row = summarySheet.addRow([label1, value1, label2, value2]);
+          row.eachCell((cell, colNumber) => {
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+            if (colNumber % 2 === 1) {
+              cell.font = { bold: true };
+            } else {
+              cell.alignment = { horizontal: 'center' };
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+            }
+          });
+        });
+        
+        summarySheet.addRow([]);
+        
+        // ORE PER DIPENDENTE
+        summarySheet.addRow(['ORE LAVORATE PER DIPENDENTE']).font = { bold: true, size: 12 };
+        summarySheet.addRow([]);
+        
+        // Raggruppa ore per dipendente
+        const employeeHours = {};
+        records.forEach(record => {
+          if (!employeeHours[record.employeeId]) {
+            employeeHours[record.employeeId] = {
+              name: record.employeeName,
+              records: []
+            };
+          }
+          employeeHours[record.employeeId].records.push(record);
+        });
+        
+        // Calcola ore per dipendente
+        const employeeStats = [];
+        Object.entries(employeeHours).forEach(([empId, data]) => {
+          const { workSessions: empSessions } = calculateWorkedHours(data.records);
+          let empTotal = 0;
+          Object.values(empSessions).forEach(h => empTotal += h);
+          employeeStats.push({
+            name: data.name,
+            hours: empTotal,
+            days: [...new Set(data.records.map(r => new Date(r.timestamp).toISOString().split('T')[0]))].length
+          });
+        });
+        
+        // Ordina per ore decrescenti
+        employeeStats.sort((a, b) => b.hours - a.hours);
+        
+        const empHeaderRow = summarySheet.addRow(['Dipendente', 'Ore Lavorate', 'Giorni Presenti', 'Media Ore/Giorno']);
+        empHeaderRow.eachCell(cell => cell.style = headerStyle);
+        
+        employeeStats.forEach(emp => {
+          const empFormatted = formatHoursMinutes(emp.hours);
+          const avgEmpDay = emp.days > 0 ? emp.hours / emp.days : 0;
+          const avgEmpDayFormatted = formatHoursMinutes(avgEmpDay);
+          
+          const row = summarySheet.addRow([
+            emp.name,
+            empFormatted.formatted,
+            emp.days,
+            avgEmpDayFormatted.formatted
+          ]);
+          
+          row.eachCell((cell, colNumber) => {
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+            if (colNumber >= 2) {
+              cell.alignment = { horizontal: 'center' };
+            }
+          });
+        });
+        
+        summarySheet.addRow([]);
+        
+        // TOTALE
+        const totalRow = summarySheet.addRow([
+          'TOTALE GENERALE',
+          totalFormatted.formatted,
+          uniqueDates.length + ' giorni',
+          avgDayFormatted.formatted
+        ]);
+        totalRow.eachCell(cell => cell.style = totalStyle);
+        
+        // ==================== FOGLIO 2: DETTAGLIO GIORNALIERO ====================
+        const detailSheet = workbook.addWorksheet('Dettaglio Giornaliero');
+        
+        detailSheet.columns = [
+          { header: 'Data', key: 'date', width: 15 },
+          { header: 'Dipendente', key: 'employee', width: 25 },
+          { header: 'Ora Ingresso', key: 'timeIn', width: 15 },
+          { header: 'Ora Uscita', key: 'timeOut', width: 15 },
+          { header: 'Ore Lavorate', key: 'hours', width: 15 },
+          { header: 'Totale Giorno', key: 'dailyTotal', width: 15 }
+        ];
+        
+        detailSheet.getRow(1).eachCell(cell => cell.style = headerStyle);
+        
+        // Ordina le date
+        const sortedDates = Object.keys(dailySessions).sort();
+        
+        sortedDates.forEach(dateKey => {
+          const sessions = dailySessions[dateKey];
+          const date = new Date(dateKey).toLocaleDateString('it-IT');
+          
+          let dailyTotal = 0;
+          sessions.forEach(session => {
+            dailyTotal += session.hours;
+          });
+          
+          const dailyFormatted = formatHoursMinutes(dailyTotal);
+          
+          // Raggruppa per dipendente
+          const empSessions = {};
+          sessions.forEach(session => {
+            const empName = records.find(r => 
+              new Date(r.timestamp).getTime() === session.timeIn.getTime()
+            )?.employeeName || 'Sconosciuto';
+            
+            if (!empSessions[empName]) {
+              empSessions[empName] = [];
+            }
+            empSessions[empName].push(session);
+          });
+          
+          let isFirstRow = true;
+          Object.entries(empSessions).forEach(([empName, empSessionsList]) => {
+            empSessionsList.forEach((session, index) => {
+              const sessionFormatted = formatHoursMinutes(session.hours);
+              const row = detailSheet.addRow({
+                date: isFirstRow ? date : '',
+                employee: empName,
+                timeIn: session.timeIn.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
+                timeOut: session.timeOut.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
+                hours: sessionFormatted.formatted,
+                dailyTotal: isFirstRow ? dailyFormatted.formatted : ''
+              });
+              
+              row.eachCell((cell, colNumber) => {
+                cell.border = {
+                  top: { style: 'thin' },
+                  left: { style: 'thin' },
+                  bottom: { style: 'thin' },
+                  right: { style: 'thin' }
+                };
+                
+                if (colNumber === 1 && isFirstRow) {
+                  cell.font = { bold: true };
+                  cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+                }
+                
+                if (colNumber === 6 && isFirstRow) {
+                  cell.font = { bold: true };
+                  cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+                }
+                
+                if (colNumber >= 3) {
+                  cell.alignment = { horizontal: 'center' };
+                }
+              });
+              
+              isFirstRow = false;
+            });
+          });
+          
+          // Riga separatore tra giorni
+          detailSheet.addRow([]);
+        });
+        
+        // ==================== FOGLIO 3: LISTA DIPENDENTI ====================
+        const employeesSheet = workbook.addWorksheet('Lista Dipendenti');
+        
+        employeesSheet.columns = [
+          { header: 'Dipendente', key: 'name', width: 30 },
+          { header: 'Ore Totali', key: 'totalHours', width: 15 },
+          { header: 'Giorni Presenti', key: 'days', width: 15 },
+          { header: 'Prima Timbratura', key: 'firstDate', width: 18 },
+          { header: 'Ultima Timbratura', key: 'lastDate', width: 18 }
+        ];
+        
+        employeesSheet.getRow(1).eachCell(cell => cell.style = headerStyle);
+        
+        employeeStats.forEach((emp, index) => {
+          const empRecords = employeeHours[Object.keys(employeeHours).find(k => 
+            employeeHours[k].name === emp.name
+          )].records;
+          
+          const firstDate = new Date(Math.min(...empRecords.map(r => new Date(r.timestamp)))).toLocaleString('it-IT');
+          const lastDate = new Date(Math.max(...empRecords.map(r => new Date(r.timestamp)))).toLocaleString('it-IT');
+          
+          const row = employeesSheet.addRow({
+            name: emp.name,
+            totalHours: formatHoursMinutes(emp.hours).formatted,
+            days: emp.days,
+            firstDate: firstDate,
+            lastDate: lastDate
+          });
+          
+          row.eachCell((cell, colNumber) => {
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+            
+            if (colNumber >= 2) {
+              cell.alignment = { horizontal: 'center' };
+            }
+            
+            // Evidenzia top 3
+            if (index < 3) {
+              cell.fill = { 
+                type: 'pattern', 
+                pattern: 'solid', 
+                fgColor: { 
+                  argb: index === 0 ? 'FFFFD700' : index === 1 ? 'FFC0C0C0' : 'FFCD7F32'
+                } 
+              };
+            }
+          });
+        });
+        
+        // ==================== FOGLIO 4: TIMBRATURE ORIGINALI ====================
+        const rawSheet = workbook.addWorksheet('Timbrature Originali');
+        
+        rawSheet.columns = [
+          { header: 'Data e Ora', key: 'timestamp', width: 20 },
+          { header: 'Dipendente', key: 'employee', width: 25 },
+          { header: 'Tipo', key: 'type', width: 12 },
+          { header: 'Dispositivo', key: 'device', width: 35 }
+        ];
+        
+        rawSheet.getRow(1).eachCell(cell => cell.style = headerStyle);
+        
+        records.forEach(record => {
+          const row = rawSheet.addRow({
+            timestamp: new Date(record.timestamp).toLocaleString('it-IT'),
+            employee: record.employeeName,
+            type: record.type === 'in' ? 'Ingresso' : 'Uscita',
+            device: record.deviceInfo
+          });
+          
+          row.eachCell((cell, colNumber) => {
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+            
+            if (colNumber === 3) {
+              cell.font = { 
+                bold: true, 
+                color: { argb: record.type === 'in' ? 'FF00B050' : 'FFE74C3C' }
+              };
+            }
+          });
+        });
+        
+        // Salva file
+        const reportPath = path.join(__dirname, 'reports');
+        if (!fs.existsSync(reportPath)) {
+          fs.mkdirSync(reportPath);
+        }
+
+        const timestamp = Date.now();
+        const cantiereId = workSiteId || 'tutti';
+        const filePath = path.join(reportPath, `report_cantiere_${cantiereId}_${timestamp}.xlsx`);
+        
+        await workbook.xlsx.writeFile(filePath);
+        resolve(filePath);
+      });
+    });
+  });
+};
+
+// Endpoint per scaricare il report cantiere
+app.get('/api/worksite/report', async (req, res) => {
+  try {
+    const workSiteId = req.query.workSiteId ? parseInt(req.query.workSiteId) : null;
+    const employeeId = req.query.employeeId ? parseInt(req.query.employeeId) : null;
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
+    
+    const filePath = await generateWorkSiteReport(workSiteId, employeeId, startDate, endDate);
+    res.download(filePath);
+  } catch (error) {
+    console.error('Error generating worksite report:', error);
     res.status(500).json({ error: error.message });
   }
 });

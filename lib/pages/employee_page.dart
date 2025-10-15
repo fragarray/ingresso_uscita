@@ -24,11 +24,40 @@ class _EmployeePageState extends State<EmployeePage> {
   String? _distanceInfo;
   double _gpsAccuracy = 0.0; // Accuratezza GPS in metri
   bool _hasGoodAccuracy = false; // Se l'accuratezza è accettabile
+  AppState? _appState; // Riferimento salvato
+  int _lastRefreshCounter = -1; // Traccia l'ultimo refresh processato
 
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Salva il riferimento e aggiungi listener solo la prima volta
+    if (_appState == null) {
+      _appState = context.read<AppState>();
+      _appState!.addListener(_onAppStateChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    _appState?.removeListener(_onAppStateChanged);
+    super.dispose();
+  }
+
+  void _onAppStateChanged() {
+    if (!mounted) return;
+    final currentCounter = _appState?.refreshCounter ?? -1;
+    // Esegui refresh solo se il counter è cambiato
+    if (currentCounter != _lastRefreshCounter && currentCounter >= 0) {
+      debugPrint('=== EMPLOYEE PAGE: Refresh triggered (counter: $currentCounter) ===');
+      _lastRefreshCounter = currentCounter;
+      _loadData();
+    }
   }
 
   Future<void> _loadData() async {
@@ -41,8 +70,17 @@ class _EmployeePageState extends State<EmployeePage> {
     try {
       final workSites = await ApiService.getWorkSites();
       if (!mounted) return;
+      
+      // Rimuovi duplicati basandosi sull'ID
+      final Map<int, WorkSite> uniqueWorkSites = {};
+      for (var ws in workSites.where((ws) => ws.isActive)) {
+        if (ws.id != null) {
+          uniqueWorkSites[ws.id!] = ws;
+        }
+      }
+      
       setState(() {
-        _workSites = workSites.where((ws) => ws.isActive).toList();
+        _workSites = uniqueWorkSites.values.toList();
       });
     } catch (e) {
       debugPrint('Error loading work sites: $e');
@@ -50,8 +88,9 @@ class _EmployeePageState extends State<EmployeePage> {
   }
 
   Future<void> _loadLastRecord() async {
-    final employee = context.read<AppState>().currentEmployee;
-    if (employee == null) return;
+    // Salva il riferimento all'employee prima di operazioni async
+    final employee = _appState?.currentEmployee;
+    if (employee == null || !mounted) return;
 
     try {
       final records = await ApiService.getAttendanceRecords(employeeId: employee.id!);
@@ -126,7 +165,7 @@ class _EmployeePageState extends State<EmployeePage> {
         // Calcola l'accuratezza GPS (accuracy è in metri)
         final accuracy = location.accuracy ?? 999.0;
         final accuracyPercentage = _calculateAccuracyPercentage(accuracy);
-        final minRequired = context.read<AppState>().minGpsAccuracyPercent;
+        final minRequired = _appState?.minGpsAccuracyPercent ?? 65.0;
         
         setState(() {
           _currentLocation = location;
@@ -187,10 +226,10 @@ class _EmployeePageState extends State<EmployeePage> {
       return;
     }
     
-    // Verifica accuratezza GPS
-    if (!_hasGoodAccuracy && !Platform.isWindows && !kIsWeb) {
-      final accuracyPercentage = _calculateAccuracyPercentage(_gpsAccuracy);
-      final minRequired = context.read<AppState>().minGpsAccuracyPercent;
+      // Verifica accuratezza GPS
+      if (!_hasGoodAccuracy && !Platform.isWindows && !kIsWeb) {
+        final accuracyPercentage = _calculateAccuracyPercentage(_gpsAccuracy);
+        final minRequired = _appState?.minGpsAccuracyPercent ?? 65.0;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -207,8 +246,12 @@ class _EmployeePageState extends State<EmployeePage> {
     setState(() => _isLoading = true);
 
     try {
-      final employee = context.read<AppState>().currentEmployee;
-      if (employee == null) return;
+      // Salva riferimento employee prima di operazioni async
+      final employee = _appState?.currentEmployee;
+      if (employee == null || !mounted) {
+        setState(() => _isLoading = false);
+        return;
+      }
 
       final locationData = await _getCurrentLocation();
       if (locationData == null) {
@@ -282,7 +325,7 @@ class _EmployeePageState extends State<EmployeePage> {
         
         // Notifica l'admin page per aggiornare le presenze
         if (!mounted) return;
-        context.read<AppState>().triggerRefresh();
+        _appState?.triggerRefresh();
         
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -309,7 +352,7 @@ class _EmployeePageState extends State<EmployeePage> {
 
   @override
   Widget build(BuildContext context) {
-    final employee = context.read<AppState>().currentEmployee;
+    final employee = _appState?.currentEmployee;
     
     return Scaffold(
       appBar: AppBar(
@@ -321,7 +364,11 @@ class _EmployeePageState extends State<EmployeePage> {
           ),
           IconButton(
             icon: const Icon(Icons.logout),
-            onPressed: () => context.read<AppState>().logout(),
+            onPressed: () {
+              if (mounted) {
+                _appState?.logout();
+              }
+            },
           ),
         ],
       ),
@@ -456,7 +503,7 @@ class _EmployeePageState extends State<EmployeePage> {
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<WorkSite>(
-                      value: _selectedWorkSite,
+                      value: _workSites.contains(_selectedWorkSite) ? _selectedWorkSite : null,
                       decoration: const InputDecoration(
                         border: OutlineInputBorder(),
                         prefixIcon: Icon(Icons.location_on),

@@ -108,6 +108,92 @@ class _ReportsTabState extends State<ReportsTab> {
     }
   }
 
+  Future<void> _generateHoursReport() async {
+    if (_selectedEmployee == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Seleziona un dipendente per generare il report ore'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      final filePath = await ApiService.downloadEmployeeHoursReport(
+        employeeId: _selectedEmployee!.id!,
+        startDate: _startDate,
+        endDate: _endDate,
+      );
+
+      if (filePath != null) {
+        await OpenFile.open(filePath);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Report ore generato per ${_selectedEmployee!.name}'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Errore durante la generazione del report ore')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Errore: ${e.toString()}')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  Future<void> _generateWorkSiteReport() async {
+    setState(() => _isLoading = true);
+    try {
+      final filePath = await ApiService.downloadWorkSiteReport(
+        workSiteId: _selectedWorkSite?.id,
+        employeeId: _selectedEmployee?.id,
+        startDate: _startDate,
+        endDate: _endDate,
+      );
+
+      if (filePath != null) {
+        await OpenFile.open(filePath);
+        if (!mounted) return;
+        final cantiereMsg = _selectedWorkSite != null 
+            ? 'per ${_selectedWorkSite!.name}' 
+            : 'per tutti i cantieri';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Report cantiere generato $cantiereMsg'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Errore durante la generazione del report cantiere')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Errore: ${e.toString()}')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
   Future<void> _selectDate(bool isStartDate) async {
     final DateTime? picked = await showDatePicker(
       context: context,
@@ -242,6 +328,30 @@ class _ReportsTabState extends State<ReportsTab> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildInfoRow(IconData icon, Color color, String label, String description) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 6),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              style: const TextStyle(fontSize: 12, color: Colors.black87),
+              children: [
+                TextSpan(
+                  text: '$label ',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                TextSpan(text: description),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -537,26 +647,168 @@ class _ReportsTabState extends State<ReportsTab> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  Center(
-                    child: ElevatedButton.icon(
-                      onPressed: _isLoading ? null : _generateReport,
-                      icon: _isLoading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  // Griglia pulsanti per generare report
+                  Column(
+                    children: [
+                      // Prima riga: Report Timbrature + Report Ore
+                      Row(
+                        children: [
+                          // Pulsante Report Timbrature
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 4.0),
+                              child: ElevatedButton.icon(
+                                onPressed: _isLoading ? null : _generateReport,
+                                icon: _isLoading
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                        ),
+                                      )
+                                    : const Icon(Icons.list_alt, size: 20),
+                                label: const Text(
+                                  'Report\nTimbrature',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 20,
+                                  ),
+                                  backgroundColor: Colors.blue,
+                                  foregroundColor: Colors.white,
+                                ),
                               ),
-                            )
-                          : const Icon(Icons.file_download),
-                      label: const Text('Genera Report'),
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 32,
-                          vertical: 16,
+                            ),
+                          ),
+                          // Pulsante Report Ore Dipendente
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 4.0),
+                              child: ElevatedButton.icon(
+                                onPressed: (_isLoading || _selectedEmployee == null) 
+                                    ? null 
+                                    : _generateHoursReport,
+                                icon: _isLoading
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                        ),
+                                      )
+                                    : const Icon(Icons.access_time, size: 20),
+                                label: const Text(
+                                  'Report Ore\nDipendente',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 20,
+                                  ),
+                                  backgroundColor: _selectedEmployee != null 
+                                      ? Colors.green 
+                                      : Colors.grey,
+                                  foregroundColor: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      // Seconda riga: Report Cantiere (full width)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: _isLoading ? null : _generateWorkSiteReport,
+                          icon: _isLoading
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                  ),
+                                )
+                              : const Icon(Icons.construction, size: 20),
+                          label: Text(
+                            _selectedWorkSite != null
+                                ? 'Report Cantiere: ${_selectedWorkSite!.name}'
+                                : 'Report Tutti i Cantieri',
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 20,
+                            ),
+                            backgroundColor: Colors.orange,
+                            foregroundColor: Colors.white,
+                          ),
                         ),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // Info tooltip
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue[50],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue[200]!),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.info, size: 16, color: Colors.blue[700]),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Tipi di Report Disponibili:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Colors.blue[900],
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        _buildInfoRow(
+                          Icons.list_alt,
+                          Colors.blue,
+                          'Timbrature:',
+                          'Report professionale con 5 fogli: Statistiche generali, Dettaglio giornaliero, Classifica dipendenti (Top 3), Riepilogo cantieri, Timbrature complete'
+                        ),
+                        const SizedBox(height: 4),
+                        _buildInfoRow(
+                          Icons.access_time,
+                          _selectedEmployee != null ? Colors.green : Colors.grey,
+                          'Ore Dipendente:',
+                          _selectedEmployee != null 
+                              ? 'Calcolo ore per ${_selectedEmployee!.name}'
+                              : 'Seleziona un dipendente per abilitare'
+                        ),
+                        const SizedBox(height: 4),
+                        _buildInfoRow(
+                          Icons.construction,
+                          Colors.orange,
+                          'Cantiere:',
+                          _selectedWorkSite != null
+                              ? 'Statistiche cantiere ${_selectedWorkSite!.name}'
+                              : 'Statistiche di tutti i cantieri'
+                        ),
+                      ],
                     ),
                   ),
                 ],

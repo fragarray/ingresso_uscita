@@ -130,6 +130,7 @@ class ApiService {
     required String type,
     required int adminId,
     String? notes,
+    DateTime? timestamp,
   }) async {
     try {
       final baseUrl = await getBaseUrl();
@@ -139,6 +140,7 @@ class ApiService {
       print('Type: $type');
       print('Admin ID: $adminId');
       print('Notes: $notes');
+      print('Custom Timestamp: $timestamp');
       
       final requestBody = {
         'employeeId': employeeId,
@@ -146,6 +148,7 @@ class ApiService {
         'type': type,
         'adminId': adminId,
         'notes': notes,
+        'timestamp': timestamp?.toIso8601String(),
       };
       print('Request body: ${json.encode(requestBody)}');
       
@@ -405,6 +408,71 @@ class ApiService {
       return null;
     } catch (e) {
       print('Download filtered report error: $e');
+      return null;
+    }
+  }
+
+  // Download report ore dipendente con calcolo ore lavorate
+  static Future<String?> downloadEmployeeHoursReport({
+    required int employeeId,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final queryParams = <String, String>{
+        'employeeId': employeeId.toString(),
+      };
+      if (startDate != null) queryParams['startDate'] = startDate.toIso8601String();
+      if (endDate != null) queryParams['endDate'] = endDate.toIso8601String();
+
+      final uri = Uri.parse('$baseUrl/attendance/hours-report').replace(queryParameters: queryParams);
+      
+      final response = await http.get(uri);
+      if (response.statusCode == 200) {
+        final bytes = response.bodyBytes;
+        final dir = await getApplicationDocumentsDirectory();
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final file = File('${dir.path}/report_ore_dipendente_$timestamp.xlsx');
+        await file.writeAsBytes(bytes);
+        return file.path;
+      }
+      return null;
+    } catch (e) {
+      print('Download hours report error: $e');
+      return null;
+    }
+  }
+
+  // Download report cantiere con statistiche avanzate
+  static Future<String?> downloadWorkSiteReport({
+    int? workSiteId,
+    int? employeeId,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final queryParams = <String, String>{};
+      if (workSiteId != null) queryParams['workSiteId'] = workSiteId.toString();
+      if (employeeId != null) queryParams['employeeId'] = employeeId.toString();
+      if (startDate != null) queryParams['startDate'] = startDate.toIso8601String();
+      if (endDate != null) queryParams['endDate'] = endDate.toIso8601String();
+
+      final uri = Uri.parse('$baseUrl/worksite/report').replace(queryParameters: queryParams);
+      
+      final response = await http.get(uri);
+      if (response.statusCode == 200) {
+        final bytes = response.bodyBytes;
+        final dir = await getApplicationDocumentsDirectory();
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final file = File('${dir.path}/report_cantiere_$timestamp.xlsx');
+        await file.writeAsBytes(bytes);
+        return file.path;
+      }
+      return null;
+    } catch (e) {
+      print('Download worksite report error: $e');
       return null;
     }
   }
