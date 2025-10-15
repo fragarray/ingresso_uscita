@@ -33,13 +33,13 @@ class _ReportsTabState extends State<ReportsTab> {
     _searchController.addListener(_filterEmployees);
     _loadData();
   }
-  
+
   @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
   }
-  
+
   void _filterEmployees() {
     final query = _searchController.text.toLowerCase();
     setState(() {
@@ -48,7 +48,7 @@ class _ReportsTabState extends State<ReportsTab> {
       } else {
         _filteredEmployees = _employees.where((emp) {
           return emp.name.toLowerCase().contains(query) ||
-                 emp.email.toLowerCase().contains(query);
+              emp.email.toLowerCase().contains(query);
         }).toList();
       }
     });
@@ -57,7 +57,9 @@ class _ReportsTabState extends State<ReportsTab> {
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
-      final employees = await ApiService.getEmployees(includeInactive: _includeInactive);
+      final employees = await ApiService.getEmployees(
+        includeInactive: _includeInactive,
+      );
       final workSites = await ApiService.getWorkSites();
       if (!mounted) return;
       setState(() {
@@ -93,13 +95,17 @@ class _ReportsTabState extends State<ReportsTab> {
       } else {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Errore durante la generazione del report')),
+          const SnackBar(
+            content: Text('Errore durante la generazione del report'),
+          ),
         );
       }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Errore durante la generazione del report')),
+        const SnackBar(
+          content: Text('Errore durante la generazione del report'),
+        ),
       );
     } finally {
       if (mounted) {
@@ -139,14 +145,16 @@ class _ReportsTabState extends State<ReportsTab> {
       } else {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Errore durante la generazione del report ore')),
+          const SnackBar(
+            content: Text('Errore durante la generazione del report ore'),
+          ),
         );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Errore: ${e.toString()}')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Errore: ${e.toString()}')));
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -167,8 +175,8 @@ class _ReportsTabState extends State<ReportsTab> {
       if (filePath != null) {
         await OpenFile.open(filePath);
         if (!mounted) return;
-        final cantiereMsg = _selectedWorkSite != null 
-            ? 'per ${_selectedWorkSite!.name}' 
+        final cantiereMsg = _selectedWorkSite != null
+            ? 'per ${_selectedWorkSite!.name}'
             : 'per tutti i cantieri';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -179,13 +187,70 @@ class _ReportsTabState extends State<ReportsTab> {
       } else {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Errore durante la generazione del report cantiere')),
+          const SnackBar(
+            content: Text('Errore durante la generazione del report cantiere'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Errore: ${e.toString()}')));
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  Future<void> _generateForcedAttendanceReport() async {
+    setState(() => _isLoading = true);
+    try {
+      final filePath = await ApiService.downloadForcedAttendanceReport(
+        employeeId: _selectedEmployee?.id,
+        workSiteId: _selectedWorkSite?.id,
+        startDate: _startDate,
+        endDate: _endDate,
+      );
+
+      if (filePath != null) {
+        await OpenFile.open(filePath);
+        if (!mounted) return;
+
+        String message = 'Report Timbrature Forzate generato';
+        if (_selectedEmployee != null) {
+          message += ' per ${_selectedEmployee!.name}';
+        }
+        if (_selectedWorkSite != null) {
+          message += ' - ${_selectedWorkSite!.name}';
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Errore durante la generazione del report timbrature forzate',
+            ),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Errore: ${e.toString()}')),
+        SnackBar(
+          content: Text('Errore: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
       );
     } finally {
       if (mounted) {
@@ -197,7 +262,9 @@ class _ReportsTabState extends State<ReportsTab> {
   Future<void> _selectDate(bool isStartDate) async {
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: isStartDate ? (_startDate ?? DateTime.now()) : (_endDate ?? DateTime.now()),
+      initialDate: isStartDate
+          ? (_startDate ?? DateTime.now())
+          : (_endDate ?? DateTime.now()),
       firstDate: DateTime(2020),
       lastDate: DateTime(2030),
     );
@@ -284,16 +351,17 @@ class _ReportsTabState extends State<ReportsTab> {
   }
 
   String _getPeriodDescription() {
-    if (_startDate == null || _endDate == null) return 'Nessun periodo selezionato';
-    
+    if (_startDate == null || _endDate == null)
+      return 'Nessun periodo selezionato';
+
     final difference = _endDate!.difference(_startDate!).inDays;
-    
+
     if (difference == 7) return '📅 Ultima settimana';
     if (difference >= 28 && difference <= 31) return '📅 Ultimo mese';
     if (difference >= 89 && difference <= 92) return '📅 Ultimi 3 mesi';
     if (difference >= 179 && difference <= 183) return '📅 Ultimi 6 mesi';
     if (difference >= 365 && difference <= 366) return '📅 Ultimo anno';
-    
+
     return '📅 $difference giorni selezionati';
   }
 
@@ -331,7 +399,12 @@ class _ReportsTabState extends State<ReportsTab> {
     );
   }
 
-  Widget _buildInfoRow(IconData icon, Color color, String label, String description) {
+  Widget _buildInfoRow(
+    IconData icon,
+    Color color,
+    String label,
+    String description,
+  ) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -364,10 +437,7 @@ class _ReportsTabState extends State<ReportsTab> {
         children: [
           const Text(
             'Genera Report Excel',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-            ),
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 32),
           Card(
@@ -378,10 +448,7 @@ class _ReportsTabState extends State<ReportsTab> {
                 children: [
                   const Text(
                     'Filtra per:',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 16),
                   // Campo ricerca Dipendente con checkbox inattivi
@@ -402,7 +469,9 @@ class _ReportsTabState extends State<ReportsTab> {
                                         icon: const Icon(Icons.clear),
                                         onPressed: () {
                                           _searchController.clear();
-                                          setState(() => _selectedEmployee = null);
+                                          setState(
+                                            () => _selectedEmployee = null,
+                                          );
                                         },
                                       )
                                     : null,
@@ -424,7 +493,9 @@ class _ReportsTabState extends State<ReportsTab> {
                                 _loadData();
                               },
                               avatar: Icon(
-                                _includeInactive ? Icons.check_circle : Icons.person_off,
+                                _includeInactive
+                                    ? Icons.check_circle
+                                    : Icons.person_off,
                                 size: 18,
                               ),
                             ),
@@ -433,7 +504,8 @@ class _ReportsTabState extends State<ReportsTab> {
                       ),
                       const SizedBox(height: 8),
                       // Lista dipendenti filtrati
-                      if (_searchController.text.isNotEmpty || _selectedEmployee != null)
+                      if (_searchController.text.isNotEmpty ||
+                          _selectedEmployee != null)
                         Container(
                           constraints: const BoxConstraints(maxHeight: 200),
                           decoration: BoxDecoration(
@@ -457,35 +529,55 @@ class _ReportsTabState extends State<ReportsTab> {
                                   },
                                 ),
                               // Dipendenti filtrati
-                              ..._filteredEmployees.map((emp) => ListTile(
-                                    leading: Icon(
-                                      emp.isAdmin ? Icons.admin_panel_settings : Icons.person,
-                                      color: emp.isActive ? Colors.blue : Colors.grey,
+                              ..._filteredEmployees.map(
+                                (emp) => ListTile(
+                                  leading: Icon(
+                                    emp.isAdmin
+                                        ? Icons.admin_panel_settings
+                                        : Icons.person,
+                                    color: emp.isActive
+                                        ? Colors.blue
+                                        : Colors.grey,
+                                  ),
+                                  title: Text(
+                                    emp.name,
+                                    style: TextStyle(
+                                      color: emp.isActive
+                                          ? Colors.black
+                                          : Colors.grey,
+                                      decoration: emp.isActive
+                                          ? null
+                                          : TextDecoration.lineThrough,
                                     ),
-                                    title: Text(
-                                      emp.name,
-                                      style: TextStyle(
-                                        color: emp.isActive ? Colors.black : Colors.grey,
-                                        decoration: emp.isActive ? null : TextDecoration.lineThrough,
-                                      ),
+                                  ),
+                                  subtitle: Text(
+                                    '${emp.email}${emp.isActive ? "" : " (Eliminato)"}',
+                                    style: TextStyle(
+                                      color: emp.isActive
+                                          ? Colors.grey[600]
+                                          : Colors.grey[400],
                                     ),
-                                    subtitle: Text(
-                                      '${emp.email}${emp.isActive ? "" : " (Eliminato)"}',
-                                      style: TextStyle(
-                                        color: emp.isActive ? Colors.grey[600] : Colors.grey[400],
-                                      ),
-                                    ),
-                                    trailing: emp.isActive 
-                                        ? const Icon(Icons.check_circle, color: Colors.green, size: 20)
-                                        : const Icon(Icons.cancel, color: Colors.red, size: 20),
-                                    selected: _selectedEmployee?.id == emp.id,
-                                    onTap: () {
-                                      setState(() {
-                                        _selectedEmployee = emp;
-                                        _searchController.text = emp.name;
-                                      });
-                                    },
-                                  )),
+                                  ),
+                                  trailing: emp.isActive
+                                      ? const Icon(
+                                          Icons.check_circle,
+                                          color: Colors.green,
+                                          size: 20,
+                                        )
+                                      : const Icon(
+                                          Icons.cancel,
+                                          color: Colors.red,
+                                          size: 20,
+                                        ),
+                                  selected: _selectedEmployee?.id == emp.id,
+                                  onTap: () {
+                                    setState(() {
+                                      _selectedEmployee = emp;
+                                      _searchController.text = emp.name;
+                                    });
+                                  },
+                                ),
+                              ),
                               if (_filteredEmployees.isEmpty)
                                 const Padding(
                                   padding: EdgeInsets.all(16.0),
@@ -500,17 +592,21 @@ class _ReportsTabState extends State<ReportsTab> {
                           ),
                         ),
                       // Dipendente selezionato
-                      if (_selectedEmployee != null && _searchController.text.isEmpty)
+                      if (_selectedEmployee != null &&
+                          _searchController.text.isEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
                           child: Chip(
                             avatar: Icon(
-                              _selectedEmployee!.isAdmin ? Icons.admin_panel_settings : Icons.person,
+                              _selectedEmployee!.isAdmin
+                                  ? Icons.admin_panel_settings
+                                  : Icons.person,
                               size: 18,
                             ),
                             label: Text(_selectedEmployee!.name),
                             deleteIcon: const Icon(Icons.close, size: 18),
-                            onDeleted: () => setState(() => _selectedEmployee = null),
+                            onDeleted: () =>
+                                setState(() => _selectedEmployee = null),
                           ),
                         ),
                     ],
@@ -528,12 +624,15 @@ class _ReportsTabState extends State<ReportsTab> {
                         value: null,
                         child: Text('Tutti i cantieri'),
                       ),
-                      ..._workSites.map((w) => DropdownMenuItem<WorkSite>(
-                            value: w,
-                            child: Text(w.name),
-                          )),
+                      ..._workSites.map(
+                        (w) => DropdownMenuItem<WorkSite>(
+                          value: w,
+                          child: Text(w.name),
+                        ),
+                      ),
                     ],
-                    onChanged: (value) => setState(() => _selectedWorkSite = value),
+                    onChanged: (value) =>
+                        setState(() => _selectedWorkSite = value),
                   ),
                   const SizedBox(height: 16),
                   // Date Range
@@ -625,7 +724,10 @@ class _ReportsTabState extends State<ReportsTab> {
                   ),
                   const SizedBox(height: 12),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.blue[50],
                       borderRadius: BorderRadius.circular(6),
@@ -633,7 +735,11 @@ class _ReportsTabState extends State<ReportsTab> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.info_outline, size: 16, color: Colors.blue[700]),
+                        Icon(
+                          Icons.info_outline,
+                          size: 16,
+                          color: Colors.blue[700],
+                        ),
                         const SizedBox(width: 6),
                         Text(
                           _getPeriodDescription(),
@@ -665,7 +771,10 @@ class _ReportsTabState extends State<ReportsTab> {
                                         height: 20,
                                         child: CircularProgressIndicator(
                                           strokeWidth: 2,
-                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                Colors.white,
+                                              ),
                                         ),
                                       )
                                     : const Icon(Icons.list_alt, size: 20),
@@ -690,8 +799,9 @@ class _ReportsTabState extends State<ReportsTab> {
                             child: Padding(
                               padding: const EdgeInsets.only(left: 4.0),
                               child: ElevatedButton.icon(
-                                onPressed: (_isLoading || _selectedEmployee == null) 
-                                    ? null 
+                                onPressed:
+                                    (_isLoading || _selectedEmployee == null)
+                                    ? null
                                     : _generateHoursReport,
                                 icon: _isLoading
                                     ? const SizedBox(
@@ -699,7 +809,10 @@ class _ReportsTabState extends State<ReportsTab> {
                                         height: 20,
                                         child: CircularProgressIndicator(
                                           strokeWidth: 2,
-                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                Colors.white,
+                                              ),
                                         ),
                                       )
                                     : const Icon(Icons.access_time, size: 20),
@@ -713,8 +826,8 @@ class _ReportsTabState extends State<ReportsTab> {
                                     horizontal: 16,
                                     vertical: 20,
                                   ),
-                                  backgroundColor: _selectedEmployee != null 
-                                      ? Colors.green 
+                                  backgroundColor: _selectedEmployee != null
+                                      ? Colors.green
                                       : Colors.grey,
                                   foregroundColor: Colors.white,
                                 ),
@@ -728,14 +841,18 @@ class _ReportsTabState extends State<ReportsTab> {
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
-                          onPressed: _isLoading ? null : _generateWorkSiteReport,
+                          onPressed: _isLoading
+                              ? null
+                              : _generateWorkSiteReport,
                           icon: _isLoading
                               ? const SizedBox(
                                   width: 20,
                                   height: 20,
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2,
-                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white,
+                                    ),
                                   ),
                                 )
                               : const Icon(Icons.construction, size: 20),
@@ -751,6 +868,40 @@ class _ReportsTabState extends State<ReportsTab> {
                               vertical: 20,
                             ),
                             backgroundColor: Colors.orange,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      // Terza riga: Report Timbrature Forzate (full width)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: _isLoading
+                              ? null
+                              : _generateForcedAttendanceReport,
+                          icon: _isLoading
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white,
+                                    ),
+                                  ),
+                                )
+                              : const Icon(Icons.warning_amber, size: 20),
+                          label: const Text(
+                            'Report Timbrature Forzate',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 20,
+                            ),
+                            backgroundColor: const Color(0xFFFF6B35),
                             foregroundColor: Colors.white,
                           ),
                         ),
@@ -788,16 +939,18 @@ class _ReportsTabState extends State<ReportsTab> {
                           Icons.list_alt,
                           Colors.blue,
                           'Timbrature:',
-                          'Report professionale con 5 fogli: Statistiche generali, Dettaglio giornaliero, Classifica dipendenti (Top 3), Riepilogo cantieri, Timbrature complete'
+                          'Report professionale con 5 fogli: Statistiche generali, Dettaglio giornaliero, Classifica dipendenti (Top 3), Riepilogo cantieri, Timbrature complete',
                         ),
                         const SizedBox(height: 4),
                         _buildInfoRow(
                           Icons.access_time,
-                          _selectedEmployee != null ? Colors.green : Colors.grey,
+                          _selectedEmployee != null
+                              ? Colors.green
+                              : Colors.grey,
                           'Ore Dipendente:',
-                          _selectedEmployee != null 
+                          _selectedEmployee != null
                               ? 'Calcolo ore per ${_selectedEmployee!.name}'
-                              : 'Seleziona un dipendente per abilitare'
+                              : 'Seleziona un dipendente per abilitare',
                         ),
                         const SizedBox(height: 4),
                         _buildInfoRow(
@@ -806,7 +959,14 @@ class _ReportsTabState extends State<ReportsTab> {
                           'Cantiere:',
                           _selectedWorkSite != null
                               ? 'Statistiche cantiere ${_selectedWorkSite!.name}'
-                              : 'Statistiche di tutti i cantieri'
+                              : 'Statistiche di tutti i cantieri',
+                        ),
+                        const SizedBox(height: 4),
+                        _buildInfoRow(
+                          Icons.warning_amber,
+                          const Color(0xFFFF6B35),
+                          'Timbrature Forzate:',
+                          'Report dettagliato con 4 fogli: Riepilogo dipendenti, Dettaglio completo, Statistiche cantieri, Statistiche amministratori. Utile per identificare abusi.',
                         ),
                       ],
                     ),

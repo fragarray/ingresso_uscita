@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
+const cron = require('node-cron');
 
 const app = express();
 const port = 3000;
@@ -48,6 +49,166 @@ setTimeout(() => {
     }
   });
 }, 1000);
+
+// ==================== AUTO-TIMBRATURA USCITA A MEZZANOTTE ====================
+
+/**
+ * Funzione per timbrare automaticamente l'uscita dei dipendenti ancora IN a mezzanotte
+ */
+const autoForceCheckout = async () => {
+  console.log('\n🕐 [AUTO-CHECKOUT] Avvio controllo timbrature aperte...');
+  
+  return new Promise((resolve, reject) => {
+    // Trova tutti i dipendenti attualmente timbrati IN (ultima timbratura = IN)
+    const query = `
+      WITH LastRecords AS (
+        SELECT 
+          employeeId,
+          MAX(id) as lastId
+        FROM attendance_records
+        GROUP BY employeeId
+      )
+      SELECT 
+        ar.employeeId,
+        ar.workSiteId,
+        e.name as employeeName,
+        ws.name as workSiteName,
+        ar.timestamp as lastInTimestamp
+      FROM attendance_records ar
+      INNER JOIN LastRecords lr ON ar.id = lr.lastId
+      INNER JOIN employees e ON ar.employeeId = e.id
+      LEFT JOIN work_sites ws ON ar.workSiteId = ws.id
+      WHERE ar.type = 'in'
+        AND e.isActive = 1
+    `;
+    
+    db.all(query, [], async (err, employees) => {
+      if (err) {
+        console.error('❌ [AUTO-CHECKOUT] Errore durante la query:', err);
+        reject(err);
+        return;
+      }
+      
+      if (employees.length === 0) {
+        console.log('✓ [AUTO-CHECKOUT] Nessun dipendente da timbrare in uscita.');
+        resolve(0);
+        return;
+      }
+      
+      console.log(`⚠️  [AUTO-CHECKOUT] Trovati ${employees.length} dipendenti ancora IN:`);
+      
+      // Trova un admin di sistema per la timbratura forzata
+      db.get('SELECT id, name FROM employees WHERE isAdmin = 1 ORDER BY id LIMIT 1', [], async (err, admin) => {
+        if (err || !admin) {
+          console.error('❌ [AUTO-CHECKOUT] Nessun admin trovato per la timbratura automatica');
+          reject(new Error('No admin found'));
+          return;
+        }
+        
+        let processed = 0;
+        let failed = 0;
+        
+        // Timestamp di mezzanotte (23:59:59 del giorno precedente)
+        const now = new Date();
+        const midnight = new Date(now);
+        midnight.setHours(23, 59, 59, 0);
+        midnight.setDate(midnight.getDate() - 1); // Giorno precedente
+        const midnightTimestamp = midnight.toISOString().slice(0, -1);
+        
+        // Processa ogni dipendente
+        for (const emp of employees) {
+          await new Promise((resolveEmp) => {
+            const deviceInfo = `AUTO-CHECKOUT MEZZANOTTE - Sistema`;
+            const notes = 'USCITA FORZATA PER SUPERAMENTO ORARIO';
+            
+            db.run(`
+              INSERT INTO attendance_records 
+              (employeeId, workSiteId, timestamp, type, deviceInfo, latitude, longitude, isForced, forcedByAdminId, notes) 
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                emp.employeeId,
+                emp.workSiteId,
+                midnightTimestamp,
+                'out',
+                deviceInfo,
+                0.0, // Latitude 0 per timbrature forzate
+                0.0, // Longitude 0 per timbrature forzate
+                1,   // isForced = true
+                admin.id,
+                notes
+              ],
+              (err) => {
+                if (err) {
+                  console.error(`   ❌ ${emp.employeeName}: ERRORE - ${err.message}`);
+                  failed++;
+                } else {
+                  console.log(`   ✓ ${emp.employeeName} - ${emp.workSiteName || 'N/D'} - OUT automatico alle 23:59:59`);
+                  processed++;
+                }
+                resolveEmp();
+              }
+            );
+          });
+        }
+        
+        console.log(`\n📊 [AUTO-CHECKOUT] Riepilogo:`);
+        console.log(`   ✓ Processati: ${processed}`);
+        console.log(`   ❌ Falliti: ${failed}`);
+        console.log(`   📅 Timestamp: ${midnightTimestamp}\n`);
+        
+        // Aggiorna il report Excel
+        try {
+          await updateExcelReport();
+          console.log('✓ [AUTO-CHECKOUT] Report Excel aggiornato');
+        } catch (error) {
+          console.error('⚠️  [AUTO-CHECKOUT] Errore aggiornamento report:', error.message);
+        }
+        
+        resolve(processed);
+      });
+    });
+  });
+};
+
+// Schedule: Esegui ogni giorno alle 00:01
+cron.schedule('1 0 * * *', async () => {
+  console.log('⏰ [CRON] Job auto-checkout avviato alle 00:01');
+  try {
+    await autoForceCheckout();
+  } catch (error) {
+    console.error('❌ [CRON] Errore durante auto-checkout:', error);
+  }
+}, {
+  timezone: "Europe/Rome"
+});
+
+console.log('✓ Scheduler auto-checkout attivato (esegue alle 00:01 ogni giorno)');
+
+// Endpoint manuale per testare l'auto-checkout (solo admin)
+app.post('/api/admin/force-auto-checkout', async (req, res) => {
+  const { adminId } = req.body;
+  
+  // Verifica che sia un admin
+  db.get('SELECT * FROM employees WHERE id = ? AND isAdmin = 1', [adminId], async (err, admin) => {
+    if (err || !admin) {
+      res.status(403).json({ error: 'Unauthorized: Not an admin' });
+      return;
+    }
+    
+    try {
+      const count = await autoForceCheckout();
+      res.json({ 
+        success: true, 
+        message: `Auto-checkout completato: ${count} dipendenti processati`,
+        processedCount: count
+      });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
+// ==================== END AUTO-CHECKOUT ====================
 
 // Routes
 app.post('/api/login', (req, res) => {
@@ -186,8 +347,8 @@ app.post('/api/attendance/force', (req, res) => {
     
     // Crea record di timbratura forzata
     db.run(`INSERT INTO attendance_records 
-      (employeeId, workSiteId, timestamp, type, deviceInfo, latitude, longitude, isForced, forcedByAdminId) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (employeeId, workSiteId, timestamp, type, deviceInfo, latitude, longitude, isForced, forcedByAdminId, notes) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         employeeId,
         workSiteId,
@@ -197,7 +358,8 @@ app.post('/api/attendance/force', (req, res) => {
         0.0, // Latitude 0 per timbrature forzate
         0.0, // Longitude 0 per timbrature forzate
         1,   // isForced = true
-        adminId
+        adminId,
+        notes && notes.trim() ? notes.trim() : null // Salva le note in colonna separata
       ],
       async (err) => {
         if (err) {
@@ -273,19 +435,55 @@ app.put('/api/employees/:id', (req, res) => {
 });
 
 app.delete('/api/employees/:id', (req, res) => {
-  // Soft delete: marca il dipendente come inattivo invece di eliminarlo
-  // I controlli di sicurezza sono gestiti lato client:
-  // - Non può eliminare se stesso
-  // - Non può eliminare l'unico admin
-  db.run('UPDATE employees SET isActive = 0, deletedAt = ? WHERE id = ?',
-    [new Date().toISOString(), req.params.id],
-    (err) => {
+  const employeeId = req.params.id;
+  
+  // Step 1: Verifica se il dipendente ha timbrature
+  db.get('SELECT COUNT(*) as count FROM attendance_records WHERE employeeId = ?', 
+    [employeeId], 
+    (err, result) => {
       if (err) {
         res.status(500).json({ error: err.message });
         return;
       }
-      res.json({ success: true });
-    });
+      
+      const hasAttendance = result.count > 0;
+      
+      if (hasAttendance) {
+        // SOFT DELETE: Dipendente con timbrature → marca come inattivo per preservare storico
+        console.log(`🔒 Soft delete dipendente ${employeeId} (${result.count} timbrature trovate)`);
+        
+        db.run('UPDATE employees SET isActive = 0, deletedAt = ? WHERE id = ?',
+          [new Date().toISOString(), employeeId],
+          (err) => {
+            if (err) {
+              res.status(500).json({ error: err.message });
+              return;
+            }
+            res.json({ 
+              success: true, 
+              deleted: false, // Soft delete
+              message: `Dipendente disattivato (${result.count} timbrature preservate)` 
+            });
+          }
+        );
+      } else {
+        // HARD DELETE: Dipendente senza timbrature → elimina completamente
+        console.log(`🗑️  Hard delete dipendente ${employeeId} (nessuna timbratura)`);
+        
+        db.run('DELETE FROM employees WHERE id = ?', [employeeId], (err) => {
+          if (err) {
+            res.status(500).json({ error: err.message });
+            return;
+          }
+          res.json({ 
+            success: true, 
+            deleted: true, // Hard delete
+            message: 'Dipendente eliminato completamente (nessuna timbratura)' 
+          });
+        });
+      }
+    }
+  );
 });
 
 // ==================== NUOVO REPORT TIMBRATURE PROFESSIONALE ====================
@@ -303,11 +501,11 @@ const generateAttendanceReport = async (filters = {}) => {
         ar.deviceInfo,
         ar.latitude,
         ar.longitude,
-        e.name as employeeName,
-        e.isActive as employeeIsActive,
+        COALESCE(e.name, '[DIPENDENTE ELIMINATO #' || ar.employeeId || ']') as employeeName,
+        COALESCE(e.isActive, 0) as employeeIsActive,
         ws.name as workSiteName
       FROM attendance_records ar
-      JOIN employees e ON ar.employeeId = e.id
+      LEFT JOIN employees e ON ar.employeeId = e.id
       LEFT JOIN work_sites ws ON ar.workSiteId = ws.id
       WHERE 1=1
     `;
@@ -931,10 +1129,10 @@ const generateEmployeeHoursReport = async (employeeId, startDate, endDate) => {
         ar.deviceInfo,
         ar.latitude,
         ar.longitude,
-        e.name as employeeName,
+        COALESCE(e.name, '[DIPENDENTE ELIMINATO #' || ar.employeeId || ']') as employeeName,
         ws.name as workSiteName
       FROM attendance_records ar
-      JOIN employees e ON ar.employeeId = e.id
+      LEFT JOIN employees e ON ar.employeeId = e.id
       LEFT JOIN work_sites ws ON ar.workSiteId = ws.id
       WHERE ar.employeeId = ?
     `;
@@ -1270,11 +1468,11 @@ const generateWorkSiteReport = async (workSiteId, employeeId, startDate, endDate
           ar.deviceInfo,
           ar.latitude,
           ar.longitude,
-          e.name as employeeName,
+          COALESCE(e.name, '[DIPENDENTE ELIMINATO #' || ar.employeeId || ']') as employeeName,
           ws.name as workSiteName,
           ws.address as workSiteAddress
         FROM attendance_records ar
-        JOIN employees e ON ar.employeeId = e.id
+        LEFT JOIN employees e ON ar.employeeId = e.id
         LEFT JOIN work_sites ws ON ar.workSiteId = ws.id
         WHERE 1=1
       `;
@@ -2116,6 +2314,414 @@ app.post('/api/backup/restore', upload.single('database'), async (req, res) => {
 });
 
 // ==================== END RESTORE ====================
+
+// ==================== REPORT TIMBRATURE FORZATE ====================
+
+// Funzione per generare report timbrature forzate
+const generateForcedAttendanceReport = async (filters = {}) => {
+  const workbook = new ExcelJS.Workbook();
+  
+  return new Promise((resolve, reject) => {
+    let query = `
+      SELECT 
+        ar.id,
+        ar.employeeId,
+        ar.workSiteId,
+        ar.timestamp,
+        ar.type,
+        ar.forcedByAdminId,
+        ar.notes,
+        COALESCE(e.name, '[DIPENDENTE ELIMINATO #' || ar.employeeId || ']') as employeeName,
+        COALESCE(e.email, '') as employeeEmail,
+        ws.name as workSiteName,
+        admin.name as adminName,
+        admin.email as adminEmail
+      FROM attendance_records ar
+      LEFT JOIN employees e ON ar.employeeId = e.id
+      LEFT JOIN work_sites ws ON ar.workSiteId = ws.id
+      LEFT JOIN employees admin ON ar.forcedByAdminId = admin.id
+      WHERE ar.forcedByAdminId IS NOT NULL
+    `;
+    
+    const params = [];
+    
+    // Applica filtri
+    if (filters.employeeId) {
+      query += ' AND ar.employeeId = ?';
+      params.push(filters.employeeId);
+    }
+    
+    if (filters.workSiteId) {
+      query += ' AND ar.workSiteId = ?';
+      params.push(filters.workSiteId);
+    }
+    
+    if (filters.startDate) {
+      query += ' AND DATE(ar.timestamp) >= DATE(?)';
+      params.push(filters.startDate);
+    }
+    
+    if (filters.endDate) {
+      query += ' AND DATE(ar.timestamp) <= DATE(?)';
+      params.push(filters.endDate);
+    }
+    
+    query += ' ORDER BY ar.timestamp DESC';
+    
+    db.all(query, params, async (err, records) => {
+      if (err) {
+        console.error('Error fetching forced attendance records:', err);
+        reject(err);
+        return;
+      }
+      
+      try {
+        // ==================== FOGLIO 1: RIEPILOGO PER DIPENDENTE ====================
+        const summarySheet = workbook.addWorksheet('Riepilogo per Dipendente');
+        
+        // Stili
+        const headerStyle = {
+          font: { bold: true, color: { argb: 'FFFFFFFF' }, size: 12 },
+          fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF6B35' } },
+          alignment: { horizontal: 'center', vertical: 'middle' },
+          border: {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          }
+        };
+        
+        const warningStyle = {
+          fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } },
+          font: { bold: true }
+        };
+        
+        const criticalStyle = {
+          fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8D7DA' } },
+          font: { bold: true, color: { argb: 'FF721C24' } }
+        };
+        
+        // Configurazione colonne
+        summarySheet.columns = [
+          { header: 'Dipendente', key: 'employee', width: 25 },
+          { header: 'Totale Timbrature Forzate', key: 'total', width: 25 },
+          { header: 'Ingressi Forzati', key: 'forcedIn', width: 20 },
+          { header: 'Uscite Forzate', key: 'forcedOut', width: 20 },
+          { header: 'Cantieri Coinvolti', key: 'worksites', width: 20 },
+          { header: 'Livello Attenzione', key: 'alertLevel', width: 20 }
+        ];
+        
+        summarySheet.getRow(1).eachCell(cell => cell.style = headerStyle);
+        summarySheet.getRow(1).height = 25;
+        
+        // Raggruppa per dipendente
+        const employeeStats = {};
+        records.forEach(record => {
+          const empId = record.employeeId;
+          if (!employeeStats[empId]) {
+            employeeStats[empId] = {
+              name: record.employeeName,
+              total: 0,
+              forcedIn: 0,
+              forcedOut: 0,
+              worksites: new Set(),
+              admins: new Set()
+            };
+          }
+          
+          employeeStats[empId].total++;
+          if (record.type === 'in') {
+            employeeStats[empId].forcedIn++;
+          } else {
+            employeeStats[empId].forcedOut++;
+          }
+          
+          if (record.workSiteName) {
+            employeeStats[empId].worksites.add(record.workSiteName);
+          }
+          if (record.adminName) {
+            employeeStats[empId].admins.add(record.adminName);
+          }
+        });
+        
+        // Ordina per numero di timbrature forzate (decrescente)
+        const sortedEmployees = Object.values(employeeStats).sort((a, b) => b.total - a.total);
+        
+        // Aggiungi righe
+        sortedEmployees.forEach(emp => {
+          let alertLevel = 'NORMALE';
+          let rowStyle = null;
+          
+          if (emp.total >= 20) {
+            alertLevel = 'CRITICO';
+            rowStyle = criticalStyle;
+          } else if (emp.total >= 10) {
+            alertLevel = 'ATTENZIONE';
+            rowStyle = warningStyle;
+          }
+          
+          const row = summarySheet.addRow({
+            employee: emp.name,
+            total: emp.total,
+            forcedIn: emp.forcedIn,
+            forcedOut: emp.forcedOut,
+            worksites: emp.worksites.size,
+            alertLevel: alertLevel
+          });
+          
+          row.eachCell((cell, colNumber) => {
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+            
+            if (colNumber >= 2 && colNumber <= 6) {
+              cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            }
+            
+            if (rowStyle && colNumber === 6) {
+              cell.style = { ...cell.style, ...rowStyle };
+            }
+          });
+        });
+        
+        // Aggiungi totale
+        summarySheet.addRow([]);
+        const totalRow = summarySheet.addRow({
+          employee: 'TOTALE GENERALE',
+          total: records.length,
+          forcedIn: records.filter(r => r.type === 'in').length,
+          forcedOut: records.filter(r => r.type === 'out').length,
+          worksites: new Set(records.map(r => r.workSiteName).filter(Boolean)).size,
+          alertLevel: ''
+        });
+        
+        totalRow.eachCell(cell => {
+          cell.font = { bold: true, size: 12 };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE9ECEF' } };
+          cell.border = {
+            top: { style: 'medium' },
+            left: { style: 'thin' },
+            bottom: { style: 'medium' },
+            right: { style: 'thin' }
+          };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+        
+        // ==================== FOGLIO 2: DETTAGLIO COMPLETO ====================
+        const detailSheet = workbook.addWorksheet('Dettaglio Completo');
+        
+        detailSheet.columns = [
+          { header: 'Data', key: 'date', width: 12 },
+          { header: 'Ora', key: 'time', width: 10 },
+          { header: 'Dipendente', key: 'employee', width: 25 },
+          { header: 'Tipo', key: 'type', width: 12 },
+          { header: 'Cantiere', key: 'worksite', width: 25 },
+          { header: 'Forzato da', key: 'admin', width: 25 },
+          { header: 'Note', key: 'notes', width: 40 }
+        ];
+        
+        detailSheet.getRow(1).eachCell(cell => cell.style = headerStyle);
+        detailSheet.getRow(1).height = 25;
+        
+        // Aggiungi i record
+        records.forEach(record => {
+          const timestamp = new Date(record.timestamp);
+          const typeLabel = record.type === 'in' ? 'INGRESSO' : 'USCITA';
+          const typeColor = record.type === 'in' ? 'FF28A745' : 'FFDC3545';
+          
+          const row = detailSheet.addRow({
+            date: timestamp.toLocaleDateString('it-IT'),
+            time: timestamp.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
+            employee: record.employeeName,
+            type: typeLabel,
+            worksite: record.workSiteName || 'Non specificato',
+            admin: record.adminName || 'Sconosciuto',
+            notes: record.notes || ''
+          });
+          
+          row.eachCell((cell, colNumber) => {
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+            cell.alignment = { vertical: 'middle' };
+            
+            // Colora la cella "Tipo"
+            if (colNumber === 4) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: typeColor } };
+              cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+              cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            }
+          });
+        });
+        
+        // ==================== FOGLIO 3: STATISTICHE PER CANTIERE ====================
+        const worksiteSheet = workbook.addWorksheet('Statistiche per Cantiere');
+        
+        worksiteSheet.columns = [
+          { header: 'Cantiere', key: 'worksite', width: 30 },
+          { header: 'Totale Timbrature Forzate', key: 'total', width: 25 },
+          { header: 'Ingressi', key: 'forcedIn', width: 15 },
+          { header: 'Uscite', key: 'forcedOut', width: 15 },
+          { header: 'Dipendenti Coinvolti', key: 'employees', width: 22 }
+        ];
+        
+        worksiteSheet.getRow(1).eachCell(cell => cell.style = headerStyle);
+        worksiteSheet.getRow(1).height = 25;
+        
+        // Raggruppa per cantiere
+        const worksiteStats = {};
+        records.forEach(record => {
+          const wsName = record.workSiteName || 'Non specificato';
+          if (!worksiteStats[wsName]) {
+            worksiteStats[wsName] = {
+              total: 0,
+              forcedIn: 0,
+              forcedOut: 0,
+              employees: new Set()
+            };
+          }
+          
+          worksiteStats[wsName].total++;
+          if (record.type === 'in') {
+            worksiteStats[wsName].forcedIn++;
+          } else {
+            worksiteStats[wsName].forcedOut++;
+          }
+          worksiteStats[wsName].employees.add(record.employeeName);
+        });
+        
+        // Ordina per totale (decrescente)
+        const sortedWorksites = Object.entries(worksiteStats).sort((a, b) => b[1].total - a[1].total);
+        
+        sortedWorksites.forEach(([wsName, stats]) => {
+          const row = worksiteSheet.addRow({
+            worksite: wsName,
+            total: stats.total,
+            forcedIn: stats.forcedIn,
+            forcedOut: stats.forcedOut,
+            employees: stats.employees.size
+          });
+          
+          row.eachCell((cell, colNumber) => {
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+            
+            if (colNumber >= 2) {
+              cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            }
+          });
+        });
+        
+        // ==================== FOGLIO 4: STATISTICHE PER AMMINISTRATORE ====================
+        const adminSheet = workbook.addWorksheet('Statistiche per Amministratore');
+        
+        adminSheet.columns = [
+          { header: 'Amministratore', key: 'admin', width: 30 },
+          { header: 'Totale Timbrature Forzate', key: 'total', width: 25 },
+          { header: 'Dipendenti Gestiti', key: 'employees', width: 22 },
+          { header: 'Cantieri', key: 'worksites', width: 15 }
+        ];
+        
+        adminSheet.getRow(1).eachCell(cell => cell.style = headerStyle);
+        adminSheet.getRow(1).height = 25;
+        
+        // Raggruppa per admin
+        const adminStats = {};
+        records.forEach(record => {
+          const adminName = record.adminName || 'Sconosciuto';
+          if (!adminStats[adminName]) {
+            adminStats[adminName] = {
+              total: 0,
+              employees: new Set(),
+              worksites: new Set()
+            };
+          }
+          
+          adminStats[adminName].total++;
+          adminStats[adminName].employees.add(record.employeeName);
+          if (record.workSiteName) {
+            adminStats[adminName].worksites.add(record.workSiteName);
+          }
+        });
+        
+        // Ordina per totale (decrescente)
+        const sortedAdmins = Object.entries(adminStats).sort((a, b) => b[1].total - a[1].total);
+        
+        sortedAdmins.forEach(([adminName, stats]) => {
+          const row = adminSheet.addRow({
+            admin: adminName,
+            total: stats.total,
+            employees: stats.employees.size,
+            worksites: stats.worksites.size
+          });
+          
+          row.eachCell((cell, colNumber) => {
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+            
+            if (colNumber >= 2) {
+              cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            }
+          });
+        });
+        
+        // Salva il file
+        const reportsDir = path.join(__dirname, 'reports');
+        if (!fs.existsSync(reportsDir)) {
+          fs.mkdirSync(reportsDir, { recursive: true });
+        }
+        
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        const fileName = `report_timbrature_forzate_${timestamp}.xlsx`;
+        const filePath = path.join(reportsDir, fileName);
+        
+        await workbook.xlsx.writeFile(filePath);
+        console.log('✓ Report timbrature forzate generato:', fileName);
+        
+        resolve(filePath);
+      } catch (error) {
+        console.error('Error creating forced attendance report:', error);
+        reject(error);
+      }
+    });
+  });
+};
+
+// Endpoint per scaricare il report timbrature forzate
+app.get('/api/attendance/forced-report', async (req, res) => {
+  try {
+    const filters = {
+      employeeId: req.query.employeeId,
+      workSiteId: req.query.workSiteId,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate
+    };
+    
+    console.log('Generating forced attendance report with filters:', filters);
+    const filePath = await generateForcedAttendanceReport(filters);
+    res.download(filePath);
+  } catch (error) {
+    console.error('Error generating forced attendance report:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== END FORCED ATTENDANCE REPORT ====================
 
 // Start server
 app.listen(port, () => {

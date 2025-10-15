@@ -16,10 +16,12 @@ class ApiService {
   // Get base URL from SharedPreferences or use default
   static Future<String> getBaseUrl() async {
     if (_cachedBaseUrl != null) return _cachedBaseUrl!;
-    
+
     final prefs = await SharedPreferences.getInstance();
     final savedIp = prefs.getString('serverIp');
-    _cachedBaseUrl = savedIp != null ? 'http://$savedIp:3000/api' : _defaultBaseUrl;
+    _cachedBaseUrl = savedIp != null
+        ? 'http://$savedIp:3000/api'
+        : _defaultBaseUrl;
     return _cachedBaseUrl!;
   }
 
@@ -41,13 +43,13 @@ class ApiService {
   static Future<Map<String, dynamic>> pingServer(String ip) async {
     try {
       final testUrl = 'http://$ip:3000/api/ping';
-      final response = await http.get(
-        Uri.parse(testUrl),
-      ).timeout(const Duration(seconds: 5));
+      final response = await http
+          .get(Uri.parse(testUrl))
+          .timeout(const Duration(seconds: 5));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        
+
         // Verifica che sia il nostro server
         if (data['serverIdentity'] == 'ingresso-uscita-server') {
           return {
@@ -92,12 +94,9 @@ class ApiService {
       final response = await http.post(
         Uri.parse('$baseUrl/login'),
         headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'email': email,
-          'password': password,
-        }),
+        body: json.encode({'email': email, 'password': password}),
       );
-      
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return Employee.fromMap(data);
@@ -123,7 +122,7 @@ class ApiService {
       return false;
     }
   }
-  
+
   static Future<bool> forceAttendance({
     required int employeeId,
     required int workSiteId,
@@ -141,7 +140,7 @@ class ApiService {
       print('Admin ID: $adminId');
       print('Notes: $notes');
       print('Custom Timestamp: $timestamp');
-      
+
       final requestBody = {
         'employeeId': employeeId,
         'workSiteId': workSiteId,
@@ -151,16 +150,16 @@ class ApiService {
         'timestamp': timestamp?.toIso8601String(),
       };
       print('Request body: ${json.encode(requestBody)}');
-      
+
       final response = await http.post(
         Uri.parse('$baseUrl/attendance/force'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(requestBody),
       );
-      
+
       print('Response status: ${response.statusCode}');
       print('Response body: ${response.body}');
-      
+
       final success = response.statusCode == 200;
       print('Force attendance success: $success');
       return success;
@@ -170,13 +169,15 @@ class ApiService {
     }
   }
 
-  static Future<List<Employee>> getEmployees({bool includeInactive = false}) async {
+  static Future<List<Employee>> getEmployees({
+    bool includeInactive = false,
+  }) async {
     try {
       final baseUrl = await getBaseUrl();
-      final uri = includeInactive 
+      final uri = includeInactive
           ? Uri.parse('$baseUrl/employees?includeInactive=true')
           : Uri.parse('$baseUrl/employees');
-          
+
       final response = await http.get(uri);
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
@@ -225,16 +226,16 @@ class ApiService {
       print('Updating worksite: ${workSite.id}');
       final workSiteData = workSite.toMap();
       print('WorkSite data: ${json.encode(workSiteData)}');
-      
+
       final response = await http.put(
         Uri.parse('$baseUrl/worksites/${workSite.id}'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(workSiteData),
       );
-      
+
       print('Update response status: ${response.statusCode}');
       print('Update response body: ${response.body}');
-      
+
       return response.statusCode == 200;
     } catch (e) {
       print('Update worksite error: $e');
@@ -256,7 +257,9 @@ class ApiService {
   static Future<Map<String, dynamic>?> getWorkSiteDetails(int id) async {
     try {
       final baseUrl = await getBaseUrl();
-      final response = await http.get(Uri.parse('$baseUrl/worksites/$id/details'));
+      final response = await http.get(
+        Uri.parse('$baseUrl/worksites/$id/details'),
+      );
       if (response.statusCode == 200) {
         return json.decode(response.body);
       }
@@ -267,13 +270,15 @@ class ApiService {
     }
   }
 
-  static Future<List<AttendanceRecord>> getAttendanceRecords({int? employeeId}) async {
+  static Future<List<AttendanceRecord>> getAttendanceRecords({
+    int? employeeId,
+  }) async {
     try {
       final baseUrl = await getBaseUrl();
-      final Uri uri = employeeId != null 
+      final Uri uri = employeeId != null
           ? Uri.parse('$baseUrl/attendance?employeeId=$employeeId')
           : Uri.parse('$baseUrl/attendance');
-          
+
       final response = await http.get(uri);
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
@@ -293,17 +298,17 @@ class ApiService {
       print('Request URL: $baseUrl/employees');
       final employeeData = employee.toMap();
       print('Request body: ${json.encode(employeeData)}');
-      
+
       final response = await http.post(
         Uri.parse('$baseUrl/employees'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(employeeData),
       );
-      
+
       print('Response status code: ${response.statusCode}');
       print('Response headers: ${response.headers}');
       print('Response body: ${response.body}');
-      
+
       return response.statusCode == 200;
     } catch (e, stackTrace) {
       print('Add employee error: $e');
@@ -315,20 +320,22 @@ class ApiService {
   static Future<bool> updateEmployee(Employee employee) async {
     try {
       final baseUrl = await getBaseUrl();
-      print('Attempting to update employee: ${employee.name} (${employee.email})');
+      print(
+        'Attempting to update employee: ${employee.name} (${employee.email})',
+      );
       print('Request URL: $baseUrl/employees/${employee.id}');
       final employeeData = employee.toMap();
       print('Request body: ${json.encode(employeeData)}');
-      
+
       final response = await http.put(
         Uri.parse('$baseUrl/employees/${employee.id}'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(employeeData),
       );
-      
+
       print('Response status code: ${response.statusCode}');
       print('Response body: ${response.body}');
-      
+
       return response.statusCode == 200;
     } catch (e, stackTrace) {
       print('Update employee error: $e');
@@ -355,18 +362,18 @@ class ApiService {
       final response = await http.get(Uri.parse('$baseUrl/attendance/report'));
       print('Response status code: ${response.statusCode}');
       print('Response headers: ${response.headers}');
-      
+
       if (response.statusCode == 200) {
         final bytes = response.bodyBytes;
         print('Response size: ${bytes.length} bytes');
-        
+
         final dir = await getApplicationDocumentsDirectory();
         print('Saving to directory: ${dir.path}');
-        
+
         final file = File('${dir.path}/report_presenze.xlsx');
         await file.writeAsBytes(bytes);
         print('File saved to: ${file.path}');
-        
+
         return file.path;
       } else {
         print('Error response body: ${response.body}');
@@ -391,12 +398,15 @@ class ApiService {
       final queryParams = <String, String>{};
       if (employeeId != null) queryParams['employeeId'] = employeeId.toString();
       if (workSiteId != null) queryParams['workSiteId'] = workSiteId.toString();
-      if (startDate != null) queryParams['startDate'] = startDate.toIso8601String();
+      if (startDate != null)
+        queryParams['startDate'] = startDate.toIso8601String();
       if (endDate != null) queryParams['endDate'] = endDate.toIso8601String();
       if (includeInactive) queryParams['includeInactive'] = 'true';
 
-      final uri = Uri.parse('$baseUrl/attendance/report').replace(queryParameters: queryParams);
-      
+      final uri = Uri.parse(
+        '$baseUrl/attendance/report',
+      ).replace(queryParameters: queryParams);
+
       final response = await http.get(uri);
       if (response.statusCode == 200) {
         final bytes = response.bodyBytes;
@@ -420,14 +430,15 @@ class ApiService {
   }) async {
     try {
       final baseUrl = await getBaseUrl();
-      final queryParams = <String, String>{
-        'employeeId': employeeId.toString(),
-      };
-      if (startDate != null) queryParams['startDate'] = startDate.toIso8601String();
+      final queryParams = <String, String>{'employeeId': employeeId.toString()};
+      if (startDate != null)
+        queryParams['startDate'] = startDate.toIso8601String();
       if (endDate != null) queryParams['endDate'] = endDate.toIso8601String();
 
-      final uri = Uri.parse('$baseUrl/attendance/hours-report').replace(queryParameters: queryParams);
-      
+      final uri = Uri.parse(
+        '$baseUrl/attendance/hours-report',
+      ).replace(queryParameters: queryParams);
+
       final response = await http.get(uri);
       if (response.statusCode == 200) {
         final bytes = response.bodyBytes;
@@ -456,11 +467,14 @@ class ApiService {
       final queryParams = <String, String>{};
       if (workSiteId != null) queryParams['workSiteId'] = workSiteId.toString();
       if (employeeId != null) queryParams['employeeId'] = employeeId.toString();
-      if (startDate != null) queryParams['startDate'] = startDate.toIso8601String();
+      if (startDate != null)
+        queryParams['startDate'] = startDate.toIso8601String();
       if (endDate != null) queryParams['endDate'] = endDate.toIso8601String();
 
-      final uri = Uri.parse('$baseUrl/worksite/report').replace(queryParameters: queryParams);
-      
+      final uri = Uri.parse(
+        '$baseUrl/worksite/report',
+      ).replace(queryParameters: queryParams);
+
       final response = await http.get(uri);
       if (response.statusCode == 200) {
         final bytes = response.bodyBytes;
@@ -477,8 +491,50 @@ class ApiService {
     }
   }
 
+  // Download report timbrature forzate
+  static Future<String?> downloadForcedAttendanceReport({
+    int? employeeId,
+    int? workSiteId,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final queryParams = <String, String>{};
+      if (employeeId != null) queryParams['employeeId'] = employeeId.toString();
+      if (workSiteId != null) queryParams['workSiteId'] = workSiteId.toString();
+      if (startDate != null)
+        queryParams['startDate'] = startDate.toIso8601String();
+      if (endDate != null) queryParams['endDate'] = endDate.toIso8601String();
+
+      final uri = Uri.parse(
+        '$baseUrl/attendance/forced-report',
+      ).replace(queryParameters: queryParams);
+
+      print('Requesting forced attendance report: $uri');
+      final response = await http.get(uri);
+      if (response.statusCode == 200) {
+        final bytes = response.bodyBytes;
+        final dir = await getApplicationDocumentsDirectory();
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final file = File(
+          '${dir.path}/report_timbrature_forzate_$timestamp.xlsx',
+        );
+        await file.writeAsBytes(bytes);
+        print('Forced attendance report saved: ${file.path}');
+        return file.path;
+      } else {
+        print('Error response: ${response.statusCode} - ${response.body}');
+      }
+      return null;
+    } catch (e) {
+      print('Download forced attendance report error: $e');
+      return null;
+    }
+  }
+
   // ==================== BACKUP DATABASE ====================
-  
+
   static Future<Map<String, dynamic>?> getBackupSettings() async {
     try {
       final baseUrl = await getBaseUrl();
@@ -581,21 +637,21 @@ class ApiService {
     try {
       final baseUrl = await getBaseUrl();
       final file = File(filePath);
-      
+
       if (!await file.exists()) {
         return {'success': false, 'error': 'File non trovato'};
       }
-      
+
       // Verifica estensione .db
       if (!filePath.toLowerCase().endsWith('.db')) {
         return {'success': false, 'error': 'Il file deve avere estensione .db'};
       }
-      
+
       final request = http.MultipartRequest(
         'POST',
         Uri.parse('$baseUrl/backup/restore'),
       );
-      
+
       request.files.add(
         await http.MultipartFile.fromPath(
           'database',
@@ -603,15 +659,18 @@ class ApiService {
           filename: path.basename(filePath),
         ),
       );
-      
+
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
-      
+
       if (response.statusCode == 200) {
         return json.decode(response.body);
       } else {
         final error = json.decode(response.body);
-        return {'success': false, 'error': error['error'] ?? 'Errore sconosciuto'};
+        return {
+          'success': false,
+          'error': error['error'] ?? 'Errore sconosciuto',
+        };
       }
     } catch (e) {
       print('Restore backup error: $e');
@@ -619,4 +678,3 @@ class ApiService {
     }
   }
 }
-

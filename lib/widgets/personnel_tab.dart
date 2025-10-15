@@ -475,57 +475,96 @@ class _PersonnelTabState extends State<PersonnelTab> {
 
     if (confirm1 != true) return;
 
-    // Download obbligatorio del report
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const AlertDialog(
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Generazione report in corso...'),
-          ],
-        ),
-      ),
-    );
-
+    // Download obbligatorio del report SOLO se il dipendente ha timbrature
+    final hasRecords = records.isNotEmpty;
     String? reportPath;
-    try {
-      reportPath = await ApiService.downloadExcelReportFiltered(
-        employeeId: employee.id!,
+    
+    if (hasRecords) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const AlertDialog(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Generazione report in corso...'),
+            ],
+          ),
+        ),
       );
 
-      if (!mounted) return;
-      Navigator.pop(context); // Chiudi loading dialog
+      try {
+        reportPath = await ApiService.downloadExcelReportFiltered(
+          employeeId: employee.id!,
+        );
 
-      if (reportPath == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Errore durante la generazione del report. Eliminazione annullata.',
+        if (!mounted) return;
+        Navigator.pop(context); // Chiudi loading dialog
+
+        if (reportPath == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Errore durante la generazione del report. Eliminazione annullata.',
+              ),
+              backgroundColor: Colors.red,
             ),
+          );
+          return;
+        }
+
+        // Mostra conferma download con path
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.green, size: 30),
+                SizedBox(width: 8),
+                Text('Report scaricato'),
+              ],
+            ),
+            content: Text(
+              'Il report delle timbrature è stato salvato in:\n\n$reportPath\n\n'
+              'Conserva questo file prima di procedere con l\'eliminazione.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        Navigator.pop(context); // Chiudi loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Errore durante la generazione del report: $e'),
             backgroundColor: Colors.red,
           ),
         );
         return;
       }
-
-      // Mostra conferma download con path
+    } else {
+      // Nessuna timbratura - mostra messaggio informativo
       await showDialog(
         context: context,
         builder: (context) => AlertDialog(
           title: const Row(
             children: [
-              Icon(Icons.check_circle, color: Colors.green, size: 30),
+              Icon(Icons.info, color: Colors.blue, size: 30),
               SizedBox(width: 8),
-              Text('Report scaricato'),
+              Text('Nessuna Timbratura'),
             ],
           ),
           content: Text(
-            'Il report delle timbrature è stato salvato in:\n\n$reportPath\n\n'
-            'Conserva questo file prima di procedere con l\'eliminazione.',
+            '${employee.name} non ha mai effettuato timbrature.\n\n'
+            'Non è necessario scaricare alcun report.\n\n'
+            'Il dipendente verrà eliminato completamente dal database.',
           ),
           actions: [
             TextButton(
@@ -535,16 +574,6 @@ class _PersonnelTabState extends State<PersonnelTab> {
           ],
         ),
       );
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context); // Chiudi loading dialog
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Errore durante la generazione del report: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
     }
 
     // Conferma finale
@@ -563,9 +592,10 @@ class _PersonnelTabState extends State<PersonnelTab> {
           'Stai per eliminare definitivamente:\n'
           '• Nome: ${employee.name}\n'
           '• Email: ${employee.email}\n'
-          '• Ruolo: ${employee.isAdmin ? "Amministratore" : "Dipendente"}\n\n'
-          'Il report è stato scaricato.\n\n'
-          'Sei assolutamente sicuro?',
+          '• Ruolo: ${employee.isAdmin ? "Amministratore" : "Dipendente"}\n'
+          '${hasRecords ? "• Timbrature: ${records.length}\n" : "• Timbrature: 0 (nessuna)\n"}'
+          '${hasRecords ? "\nIl report è stato scaricato.\n" : "\nNessun report da scaricare.\n"}'
+          '\nSei assolutamente sicuro?',
         ),
         actions: [
           TextButton(
@@ -591,7 +621,9 @@ class _PersonnelTabState extends State<PersonnelTab> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              '${employee.name} eliminato. Report salvato in:\n$reportPath',
+              hasRecords 
+                ? '${employee.name} eliminato. Report salvato in:\n$reportPath'
+                : '${employee.name} eliminato (nessuna timbratura presente)',
             ),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 5),

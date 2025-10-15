@@ -48,6 +48,14 @@ db.serialize(() => {
     }
   });
   
+  db.run(`ALTER TABLE attendance_records ADD COLUMN notes TEXT`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding notes column:', err);
+    } else if (!err) {
+      console.log('✓ Column notes added to attendance_records');
+    }
+  });
+  
   // Aggiungi colonne per soft delete degli employees
   db.run(`ALTER TABLE employees ADD COLUMN isActive INTEGER DEFAULT 1`, (err) => {
     if (err && !err.message.includes('duplicate column')) {
