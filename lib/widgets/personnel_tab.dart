@@ -157,7 +157,11 @@ class _PersonnelTabState extends State<PersonnelTab> {
     final pairs = <Map<String, dynamic>>[];
     AttendanceRecord? lastIn;
     
-    for (var record in _employeeAttendance) {
+    // IMPORTANTE: Il server restituisce i record in ordine DESC (dal più recente)
+    // ma per accoppiarli correttamente dobbiamo processarli in ordine cronologico ASC (dal più vecchio)
+    final sortedRecords = _employeeAttendance.reversed.toList();
+    
+    for (var record in sortedRecords) {
       if (record.type == 'in') {
         // Se c'è già un IN senza OUT, lo aggiungiamo come singolo
         if (lastIn != null) {
@@ -198,7 +202,8 @@ class _PersonnelTabState extends State<PersonnelTab> {
       });
     }
     
-    return pairs;
+    // Inverti l'ordine per mostrare dal più recente al più vecchio
+    return pairs.reversed.toList();
   }
 
   Future<void> _removeEmployee(Employee employee) async {
@@ -2343,133 +2348,27 @@ class _PersonnelTabState extends State<PersonnelTab> {
                             ),
                             Expanded(
                               child: ListView.builder(
-                                itemCount: _employeeAttendance.length,
+                                itemCount: _createAttendancePairs().length,
                                 itemBuilder: (context, index) {
-                                  final record = _employeeAttendance[index];
-                                  final isForced = record.isForced;
+                                  final pair = _createAttendancePairs()[index];
+                                  final inRecord = pair['in'] as AttendanceRecord?;
+                                  final outRecord = pair['out'] as AttendanceRecord?;
+                                  final isMixed = pair['isMixed'] as bool;
                                   
-                                  // Trova il cantiere associato
-                                  final workSite = _workSites.firstWhere(
-                                    (ws) => ws.id == record.workSiteId,
-                                    orElse: () => WorkSite(
-                                      id: 0,
-                                      name: 'Cantiere sconosciuto',
-                                      address: '',
-                                      latitude: 0,
-                                      longitude: 0,
-                                    ),
-                                  );
-
-                                  return Card(
-                                    margin: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                    color: isForced ? Colors.orange[50] : null,
-                                    child: ListTile(
-                                      leading: Stack(
-                                        clipBehavior: Clip.none,
-                                        children: [
-                                          Icon(
-                                            record.type == 'in'
-                                                ? Icons.login
-                                                : Icons.logout,
-                                            color: record.type == 'in'
-                                                ? Colors.green
-                                                : Colors.red,
-                                            size: 32,
-                                          ),
-                                          if (isForced)
-                                            Positioned(
-                                              right: -4,
-                                              top: -4,
-                                              child: Container(
-                                                padding: const EdgeInsets.all(
-                                                  2,
-                                                ),
-                                                decoration: const BoxDecoration(
-                                                  color: Colors.orange,
-                                                  shape: BoxShape.circle,
-                                                ),
-                                                child: const Icon(
-                                                  Icons.warning,
-                                                  color: Colors.white,
-                                                  size: 14,
-                                                ),
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                      title: Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              '${DateFormat('dd/MM/yyyy HH:mm:ss').format(record.timestamp.toLocal())} - ${record.type == 'in' ? 'Ingresso' : 'Uscita'}',
-                                            ),
-                                          ),
-                                          if (isForced) ...[
-                                            const SizedBox(width: 8),
-                                            Chip(
-                                              label: const Text(
-                                                'FORZATA',
-                                                style: TextStyle(
-                                                  fontSize: 10,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.white,
-                                                ),
-                                              ),
-                                              backgroundColor: Colors.orange,
-                                              padding: EdgeInsets.zero,
-                                              materialTapTargetSize:
-                                                  MaterialTapTargetSize
-                                                      .shrinkWrap,
-                                            ),
-                                          ],
-                                        ],
-                                      ),
-                                      subtitle: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Icon(
-                                                Icons.location_on,
-                                                size: 14,
-                                                color: Colors.grey[600],
-                                              ),
-                                              const SizedBox(width: 4),
-                                              Expanded(
-                                                child: Text(
-                                                  workSite.name,
-                                                  style: TextStyle(
-                                                    color: Colors.grey[700],
-                                                  ),
-                                                  overflow: TextOverflow.ellipsis,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          if (isForced &&
-                                              record.deviceInfo.isNotEmpty)
-                                            Text(
-                                              record.deviceInfo,
-                                              style: const TextStyle(
-                                                fontStyle: FontStyle.italic,
-                                                fontSize: 12,
-                                                color: Colors.orange,
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                      trailing: isForced
-                                          ? const Icon(
-                                              Icons.admin_panel_settings,
-                                              color: Colors.orange,
-                                            )
-                                          : null,
-                                    ),
-                                  );
+                                  // Se è una coppia completa
+                                  if (inRecord != null && outRecord != null) {
+                                    return _buildSessionPairCard(inRecord, outRecord, isMixed);
+                                  }
+                                  // Se è solo IN (dipendente attualmente timbrato)
+                                  else if (inRecord != null) {
+                                    return _buildSingleRecordCard(inRecord, isIn: true);
+                                  }
+                                  // Se è solo OUT (anomalia)
+                                  else if (outRecord != null) {
+                                    return _buildSingleRecordCard(outRecord, isIn: false);
+                                  }
+                                  
+                                  return const SizedBox.shrink();
                                 },
                               ),
                             ),
@@ -2918,93 +2817,210 @@ class _PersonnelTabState extends State<PersonnelTab> {
     final hours = duration.inHours;
     final minutes = duration.inMinutes % 60;
     
+    // Verifica se l'uscita è in un giorno diverso
+    final inDate = DateFormat('dd/MM/yyyy').format(inRecord.timestamp.toLocal());
+    final outDate = DateFormat('dd/MM/yyyy').format(outRecord.timestamp.toLocal());
+    final isDifferentDay = inDate != outDate;
+    
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 6), // Ridotto da 8 a 6
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isMixed 
+            ? [Colors.orange[50]!, Colors.orange[100]!]
+            : [Colors.blue[50]!, Colors.blue[100]!],
+        ),
+        borderRadius: BorderRadius.circular(12), // Ridotto da 16 a 12
         border: Border.all(
-          color: isMixed ? Colors.orange.withOpacity(0.3) : Colors.blue.withOpacity(0.3),
-          width: 2,
+          color: isMixed ? Colors.orange : Colors.blue,
+          width: 1.5, // Ridotto da 2 a 1.5
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 6,
-            offset: const Offset(0, 3),
+            color: (isMixed ? Colors.orange : Colors.blue).withOpacity(0.15), // Ridotto opacità
+            blurRadius: 4, // Ridotto da 8 a 4
+            offset: const Offset(0, 2), // Ridotto da (0, 4) a (0, 2)
           ),
         ],
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Header con data e durata
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), // Ridotto padding
             decoration: BoxDecoration(
-              color: isMixed ? Colors.orange[50] : Colors.blue[50],
+              gradient: LinearGradient(
+                colors: isMixed 
+                  ? [Colors.orange[600]!, Colors.orange[700]!]
+                  : [Colors.blue[600]!, Colors.blue[700]!],
+              ),
               borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(10),
+                topLeft: Radius.circular(10), // Ridotto da 14 a 10
                 topRight: Radius.circular(10),
               ),
             ),
             child: Row(
               children: [
-                Icon(
-                  Icons.calendar_today,
-                  size: 16,
-                  color: isMixed ? Colors.orange[700] : Colors.blue[700],
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  DateFormat('dd/MM/yyyy').format(inRecord.timestamp.toLocal()),
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: isMixed ? Colors.orange[900] : Colors.blue[900],
+                Container(
+                  padding: const EdgeInsets.all(4), // Ridotto da 6 a 4
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(6), // Ridotto da 8 a 6
+                  ),
+                  child: const Icon(
+                    Icons.calendar_today,
+                    size: 14, // Ridotto da 18 a 14
+                    color: Colors.white,
                   ),
                 ),
-                const Spacer(),
-                if (isMixed)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.orange,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Text(
-                      'CANTIERI MISTI',
-                      style: TextStyle(
-                        fontSize: 9,
+                const SizedBox(width: 8), // Ridotto da 12 a 8
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      inDate,
+                      style: const TextStyle(
+                        fontSize: 14, // Ridotto da 16 a 14
                         fontWeight: FontWeight.bold,
                         color: Colors.white,
                       ),
                     ),
+                    if (isDifferentDay)
+                      Text(
+                        'Turno notturno → $outDate',
+                        style: TextStyle(
+                          fontSize: 10, // Ridotto da 11 a 10
+                          color: Colors.white.withOpacity(0.9),
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                  ],
+                ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4), // Ridotto padding
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16), // Ridotto da 20 a 16
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.08), // Ridotto opacità
+                        blurRadius: 3, // Ridotto da 4 a 3
+                        offset: const Offset(0, 1), // Ridotto offset
+                      ),
+                    ],
                   ),
-                const SizedBox(width: 8),
-                Icon(Icons.schedule, size: 16, color: Colors.grey[600]),
-                const SizedBox(width: 4),
-                Text(
-                  '${hours}h ${minutes}m',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey[800],
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.timer,
+                        size: 16, // Ridotto da 18 a 16
+                        color: Colors.grey,
+                      ),
+                      const SizedBox(width: 4), // Ridotto da 6 a 4
+                      Text(
+                        '${hours}h ${minutes}m',
+                        style: const TextStyle(
+                          fontSize: 13, // Ridotto da 14 a 13
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
+          
+          // Badge cantieri misti
+          if (isMixed)
+            Container(
+              margin: const EdgeInsets.fromLTRB(8, 6, 8, 0), // Ridotto margini ulteriormente
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3), // Ridotto padding
+              decoration: BoxDecoration(
+                color: Colors.orange,
+                borderRadius: BorderRadius.circular(5), // Ridotto da 6 a 5
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.swap_horiz, size: 12, color: Colors.white), // Ridotto da 14 a 12
+                  const SizedBox(width: 3), // Ridotto da 4 a 3
+                  const Text(
+                    'CANTIERI DIVERSI',
+                    style: TextStyle(
+                      fontSize: 9, // Ridotto da 10 a 9
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      letterSpacing: 0.2, // Ridotto da 0.3 a 0.2
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          
           // Contenuto IN/OUT
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(8), // Ridotto da 12 a 8
             child: Row(
               children: [
                 // IN
                 Expanded(
                   child: _buildMiniRecord(inRecord, inWorkSite, isIn: true),
                 ),
-                // Freccia
+                // Linea connettore centrale
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Icon(Icons.arrow_forward, color: Colors.grey[400], size: 20),
+                  padding: const EdgeInsets.symmetric(horizontal: 6), // Ridotto da 8 a 6
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 2, // Ridotto da 3 a 2
+                        height: 15, // Ridotto da 20 a 15
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.green.withOpacity(0.5),
+                              Colors.grey[300]!,
+                            ],
+                          ),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.all(3), // Ridotto da 4 a 3
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.grey[300]!, width: 1), // Ridotto da 1.5 a 1
+                        ),
+                        child: Icon(
+                          Icons.arrow_forward,
+                          size: 10, // Ridotto da 12 a 10
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      Container(
+                        width: 2, // Ridotto da 3 a 2
+                        height: 15, // Ridotto da 20 a 15
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.grey[300]!,
+                              Colors.red.withOpacity(0.5),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 // OUT
                 Expanded(
@@ -3018,36 +3034,78 @@ class _PersonnelTabState extends State<PersonnelTab> {
     );
   }
 
-  // Mini card per singolo record (IN o OUT) dentro la coppia
+  // Mini card per singolo record (IN o OUT) dentro la coppia - LAYOUT ORIZZONTALE
   Widget _buildMiniRecord(AttendanceRecord record, WorkSite workSite, {required bool isIn}) {
     final isForced = record.isForced;
-    return Column(
-      children: [
-        Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: isIn ? Colors.green : Colors.red,
-            borderRadius: BorderRadius.circular(8),
+    
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isIn ? Colors.green.withOpacity(0.3) : Colors.red.withOpacity(0.3),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: (isIn ? Colors.green : Colors.red).withOpacity(0.08),
+            blurRadius: 2,
+            offset: const Offset(0, 1),
           ),
-          child: Stack(
+        ],
+      ),
+      child: Row(
+        children: [
+          // Icona con badge admin se forzato
+          Stack(
+            clipBehavior: Clip.none,
             children: [
-              Center(
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: isIn 
+                      ? [Colors.green[400]!, Colors.green[600]!]
+                      : [Colors.red[400]!, Colors.red[600]!],
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  boxShadow: [
+                    BoxShadow(
+                      color: (isIn ? Colors.green : Colors.red).withOpacity(0.15),
+                      blurRadius: 3,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
+                ),
                 child: Icon(
                   isIn ? Icons.login : Icons.logout,
                   color: Colors.white,
-                  size: 24,
+                  size: 20,
                 ),
               ),
               if (isForced)
                 Positioned(
-                  right: -2,
-                  top: -2,
+                  right: -3,
+                  top: -3,
                   child: Container(
-                    padding: const EdgeInsets.all(2),
-                    decoration: const BoxDecoration(
-                      color: Colors.orange,
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Colors.orange, Colors.deepOrange],
+                      ),
                       shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.orange.withOpacity(0.5),
+                          blurRadius: 3,
+                          offset: const Offset(0, 1),
+                        ),
+                      ],
                     ),
                     child: const Icon(
                       Icons.admin_panel_settings,
@@ -3058,46 +3116,83 @@ class _PersonnelTabState extends State<PersonnelTab> {
                 ),
             ],
           ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          isIn ? 'INGRESSO' : 'USCITA',
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.bold,
-            color: isIn ? Colors.green[700] : Colors.red[700],
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          DateFormat('HH:mm').format(record.timestamp.toLocal()),
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: Colors.grey[800],
-          ),
-        ),
-        const SizedBox(height: 4),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.location_on, size: 10, color: Colors.grey[500]),
-            const SizedBox(width: 2),
-            Flexible(
-              child: Text(
-                workSite.name,
-                style: TextStyle(
-                  fontSize: 10,
-                  color: Colors.grey[600],
+          const SizedBox(width: 8),
+          
+          // Contenuto orizzontale: tipo, orario, cantiere
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Prima riga: Badge tipo + Orario
+                Row(
+                  children: [
+                    // Badge tipo
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: isIn ? Colors.green[50] : Colors.red[50],
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        isIn ? 'IN' : 'OUT',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: isIn ? Colors.green[800] : Colors.red[800],
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    
+                    // Orario
+                    Icon(
+                      Icons.access_time,
+                      size: 14,
+                      color: Colors.grey[600],
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      DateFormat('HH:mm').format(record.timestamp.toLocal()),
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
                 ),
-                overflow: TextOverflow.ellipsis,
-                maxLines: 2,
-                textAlign: TextAlign.center,
-              ),
+                const SizedBox(height: 5),
+                
+                // Seconda riga: Cantiere
+                Row(
+                  children: [
+                    Icon(
+                      Icons.location_on,
+                      size: 13,
+                      color: Colors.grey[600],
+                    ),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        workSite.name,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[700],
+                          fontWeight: FontWeight.w500,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-          ],
-        ),
-      ],
+          ),
+        ],
+      ),
     );
   }
 

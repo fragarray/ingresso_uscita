@@ -65,11 +65,21 @@ db.serialize(() => {
     }
   });
   
+  // Aggiungi colonna deletedAt per soft delete
   db.run(`ALTER TABLE employees ADD COLUMN deletedAt DATETIME`, (err) => {
     if (err && !err.message.includes('duplicate column')) {
       console.error('Error adding deletedAt column:', err);
     } else if (!err) {
       console.log('✓ Column deletedAt added to employees');
+    }
+  });
+  
+  // Aggiungi colonna allowNightShift per autorizzare turni notturni oltre mezzanotte
+  db.run(`ALTER TABLE employees ADD COLUMN allowNightShift INTEGER DEFAULT 0`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding allowNightShift column:', err);
+    } else if (!err) {
+      console.log('✓ Column allowNightShift added to employees');
     }
   });
 

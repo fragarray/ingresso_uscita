@@ -6,9 +6,16 @@ const fs = require('fs');
 const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
 const cron = require('node-cron');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const port = 3000;
+
+// ==================== CONFIGURAZIONE ORARIO REPORT GIORNALIERO ====================
+// Formato: "HH:MM" (es: "00:05", "08:00", "18:30")
+// Modifica questo valore per cambiare l'orario di invio del report giornaliero
+const DAILY_REPORT_TIME = "00:05";
+// =================================================================================
 
 // Database
 const db = require('./db');
@@ -60,6 +67,7 @@ const autoForceCheckout = async () => {
   
   return new Promise((resolve, reject) => {
     // Trova tutti i dipendenti attualmente timbrati IN (ultima timbratura = IN)
+    // ESCLUDI i dipendenti con allowNightShift = 1 (autorizzati ai turni notturni)
     const query = `
       WITH LastRecords AS (
         SELECT 
@@ -80,6 +88,7 @@ const autoForceCheckout = async () => {
       LEFT JOIN work_sites ws ON ar.workSiteId = ws.id
       WHERE ar.type = 'in'
         AND e.isActive = 1
+        AND (e.allowNightShift IS NULL OR e.allowNightShift = 0)
     `;
     
     db.all(query, [], async (err, employees) => {
@@ -183,6 +192,218 @@ cron.schedule('1 0 * * *', async () => {
 });
 
 console.log('✓ Scheduler auto-checkout attivato (esegue alle 00:01 ogni giorno)');
+
+// ==================== EMAIL CONFIGURATION ====================
+
+const emailConfigFile = path.join(__dirname, 'email_config.json');
+
+// Carica configurazione email
+function loadEmailConfig() {
+  try {
+    if (fs.existsSync(emailConfigFile)) {
+      return JSON.parse(fs.readFileSync(emailConfigFile, 'utf8'));
+    }
+  } catch (error) {
+    console.error('❌ Error loading email config:', error);
+  }
+  return {
+    emailEnabled: false,
+    smtpHost: 'smtp.gmail.com',
+    smtpPort: 587,
+    smtpSecure: false,
+    smtpUser: '',
+    smtpPassword: '',
+    fromEmail: '',
+    fromName: 'Sistema Timbrature',
+    dailyReportEnabled: true,
+    dailyReportTime: '00:05'
+  };
+}
+
+// Salva configurazione email
+function saveEmailConfig(config) {
+  try {
+    fs.writeFileSync(emailConfigFile, JSON.stringify(config, null, 2));
+    return true;
+  } catch (error) {
+    console.error('❌ Error saving email config:', error);
+    return false;
+  }
+}
+
+// Crea transporter nodemailer
+function createEmailTransporter() {
+  const config = loadEmailConfig();
+  
+  if (!config.emailEnabled || !config.smtpUser || !config.smtpPassword) {
+    return null;
+  }
+  
+  return nodemailer.createTransport({
+    host: config.smtpHost,
+    port: config.smtpPort,
+    secure: config.smtpSecure,
+    auth: {
+      user: config.smtpUser,
+      pass: config.smtpPassword
+    }
+  });
+}
+
+// Funzione per inviare report giornaliero a tutti gli admin
+const sendDailyReportToAdmins = async () => {
+  console.log('\n📧 [EMAIL] Avvio invio report giornaliero agli admin...');
+  
+  const config = loadEmailConfig();
+  
+  if (!config.emailEnabled || !config.dailyReportEnabled) {
+    console.log('⚠️  [EMAIL] Invio email disabilitato nella configurazione');
+    return;
+  }
+  
+  try {
+    // 1. Trova tutti gli admin
+    const admins = await new Promise((resolve, reject) => {
+      db.all('SELECT id, name, email FROM employees WHERE isAdmin = 1 AND isActive = 1', [], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+    });
+    
+    if (admins.length === 0) {
+      console.log('⚠️  [EMAIL] Nessun admin trovato');
+      return;
+    }
+    
+    console.log(`📋 [EMAIL] Trovati ${admins.length} amministratori`);
+    
+    // 2. Calcola date (giorno precedente)
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(0, 0, 0, 0);
+    
+    const startDate = yesterday.toISOString();
+    
+    const endOfYesterday = new Date(yesterday);
+    endOfYesterday.setHours(23, 59, 59, 999);
+    const endDate = endOfYesterday.toISOString();
+    
+    const dateStr = yesterday.toLocaleDateString('it-IT', { 
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric' 
+    });
+    
+    console.log(`📅 [EMAIL] Generazione report per: ${dateStr}`);
+    
+    // 3. Genera report (tutti i cantieri, tutti i dipendenti, solo giorno precedente)
+    const reportPath = await generateWorkSiteReport(null, null, startDate, endDate);
+    
+    if (!fs.existsSync(reportPath)) {
+      console.error('❌ [EMAIL] File report non trovato:', reportPath);
+      return;
+    }
+    
+    const fileStats = fs.statSync(reportPath);
+    console.log(`✓ [EMAIL] Report generato: ${path.basename(reportPath)} (${(fileStats.size / 1024).toFixed(2)} KB)`);
+    
+    // 4. Crea transporter
+    const transporter = createEmailTransporter();
+    
+    if (!transporter) {
+      console.error('❌ [EMAIL] Impossibile creare transporter (verifica configurazione SMTP)');
+      return;
+    }
+    
+    // 5. Invia email a ciascun admin
+    let sent = 0;
+    let failed = 0;
+    
+    for (const admin of admins) {
+      try {
+        const mailOptions = {
+          from: `"${config.fromName}" <${config.fromEmail}>`,
+          to: admin.email,
+          subject: `Report Giornaliero Timbrature - ${dateStr}`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+                <h1 style="color: white; margin: 0; font-size: 24px;">📊 Report Timbrature</h1>
+                <p style="color: white; margin: 10px 0 0 0; opacity: 0.9;">Riepilogo giornaliero automatico</p>
+              </div>
+              
+              <div style="background: #f8f9fa; padding: 30px; border-radius: 0 0 10px 10px;">
+                <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
+                  Gentile <strong>${admin.name}</strong>,
+                </p>
+                
+                <p style="font-size: 14px; color: #666; line-height: 1.6; margin-bottom: 20px;">
+                  In allegato trovi il report completo delle timbrature di <strong>tutti i cantieri</strong> 
+                  e <strong>tutti i dipendenti</strong> per la giornata di <strong>${dateStr}</strong>.
+                </p>
+                
+                <div style="background: white; padding: 20px; border-radius: 8px; border-left: 4px solid #667eea; margin-bottom: 20px;">
+                  <p style="margin: 0; color: #555; font-size: 14px;">
+                    <strong style="color: #667eea;">📅 Data:</strong> ${dateStr}<br>
+                    <strong style="color: #667eea;">📍 Cantieri:</strong> Tutti<br>
+                    <strong style="color: #667eea;">👥 Dipendenti:</strong> Tutti<br>
+                    <strong style="color: #667eea;">📎 Allegato:</strong> ${path.basename(reportPath)}
+                  </p>
+                </div>
+                
+                <p style="font-size: 13px; color: #999; line-height: 1.6; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+                  <em>Questa email è stata inviata automaticamente dal Sistema di Gestione Timbrature alle ore 00:05.</em><br>
+                  <em>Report generato il ${new Date().toLocaleString('it-IT')}.</em>
+                </p>
+              </div>
+            </div>
+          `,
+          attachments: [
+            {
+              filename: path.basename(reportPath),
+              path: reportPath
+            }
+          ]
+        };
+        
+        await transporter.sendMail(mailOptions);
+        console.log(`   ✓ ${admin.name} (${admin.email})`);
+        sent++;
+      } catch (error) {
+        console.error(`   ❌ ${admin.name} (${admin.email}): ${error.message}`);
+        failed++;
+      }
+    }
+    
+    console.log(`\n📊 [EMAIL] Riepilogo invio:`);
+    console.log(`   ✓ Inviati: ${sent}`);
+    console.log(`   ❌ Falliti: ${failed}`);
+    console.log(`   📎 Report: ${path.basename(reportPath)}\n`);
+    
+    // 6. Pulizia file temporaneo (opzionale - mantieni per debug)
+    // fs.unlinkSync(reportPath);
+    
+  } catch (error) {
+    console.error('❌ [EMAIL] Errore durante invio report giornaliero:', error);
+  }
+};
+
+// Schedule: Report giornaliero (orario configurabile tramite DAILY_REPORT_TIME)
+const [reportHour, reportMinute] = DAILY_REPORT_TIME.split(':').map(Number);
+const cronExpression = `${reportMinute} ${reportHour} * * *`;
+
+cron.schedule(cronExpression, async () => {
+  console.log(`⏰ [CRON] Job report giornaliero avviato alle ${DAILY_REPORT_TIME}`);
+  try {
+    await sendDailyReportToAdmins();
+  } catch (error) {
+    console.error('❌ [CRON] Errore durante invio report giornaliero:', error);
+  }
+}, {
+  timezone: "Europe/Rome"
+});
+
+console.log(`✓ Scheduler report giornaliero attivato (esegue alle ${DAILY_REPORT_TIME} ogni giorno)`);
 
 // Endpoint manuale per testare l'auto-checkout (solo admin)
 app.post('/api/admin/force-auto-checkout', async (req, res) => {
@@ -491,11 +712,12 @@ app.get('/api/employees', (req, res) => {
 });
 
 app.post('/api/employees', (req, res) => {
-  const { name, email, password, isAdmin } = req.body;
+  const { name, email, password, isAdmin, allowNightShift } = req.body;
   const isAdminValue = isAdmin === 1 || isAdmin === true ? 1 : 0;
+  const allowNightShiftValue = allowNightShift === 1 || allowNightShift === true ? 1 : 0;
   
-  db.run('INSERT INTO employees (name, email, password, isAdmin) VALUES (?, ?, ?, ?)',
-    [name, email, password, isAdminValue],
+  db.run('INSERT INTO employees (name, email, password, isAdmin, allowNightShift) VALUES (?, ?, ?, ?, ?)',
+    [name, email, password, isAdminValue, allowNightShiftValue],
     function(err) {
       if (err) {
         res.status(500).json({ error: err.message });
@@ -506,17 +728,18 @@ app.post('/api/employees', (req, res) => {
 });
 
 app.put('/api/employees/:id', (req, res) => {
-  const { name, email, password, isAdmin } = req.body;
+  const { name, email, password, isAdmin, allowNightShift } = req.body;
   const isAdminValue = isAdmin === 1 || isAdmin === true ? 1 : 0;
+  const allowNightShiftValue = allowNightShift === 1 || allowNightShift === true ? 1 : 0;
   
   // Se la password è fornita, aggiorniamo anche quella
   let query, params;
   if (password && password.length > 0) {
-    query = 'UPDATE employees SET name = ?, email = ?, password = ?, isAdmin = ? WHERE id = ?';
-    params = [name, email, password, isAdminValue, req.params.id];
+    query = 'UPDATE employees SET name = ?, email = ?, password = ?, isAdmin = ?, allowNightShift = ? WHERE id = ?';
+    params = [name, email, password, isAdminValue, allowNightShiftValue, req.params.id];
   } else {
-    query = 'UPDATE employees SET name = ?, email = ?, isAdmin = ? WHERE id = ?';
-    params = [name, email, isAdminValue, req.params.id];
+    query = 'UPDATE employees SET name = ?, email = ?, isAdmin = ?, allowNightShift = ? WHERE id = ?';
+    params = [name, email, isAdminValue, allowNightShiftValue, req.params.id];
   }
   
   db.run(query, params, function(err) {
@@ -3122,6 +3345,149 @@ app.get('/api/attendance/forced-report', async (req, res) => {
 });
 
 // ==================== END FORCED ATTENDANCE REPORT ====================
+
+// ==================== EMAIL CONFIGURATION API ====================
+
+// GET - Configurazione email (solo admin)
+app.get('/api/email/config', (req, res) => {
+  const { adminId } = req.query;
+  
+  // Verifica admin
+  db.get('SELECT * FROM employees WHERE id = ? AND isAdmin = 1', [adminId], (err, admin) => {
+    if (err || !admin) {
+      res.status(403).json({ error: 'Unauthorized: Not an admin' });
+      return;
+    }
+    
+    const config = loadEmailConfig();
+    // Non inviare la password al client
+    const safeConfig = { ...config };
+    delete safeConfig.smtpPassword;
+    
+    res.json(safeConfig);
+  });
+});
+
+// PUT - Aggiorna configurazione email (solo admin)
+app.put('/api/email/config', (req, res) => {
+  const { adminId, config } = req.body;
+  
+  // Verifica admin
+  db.get('SELECT * FROM employees WHERE id = ? AND isAdmin = 1', [adminId], (err, admin) => {
+    if (err || !admin) {
+      res.status(403).json({ error: 'Unauthorized: Not an admin' });
+      return;
+    }
+    
+    const success = saveEmailConfig(config);
+    
+    if (success) {
+      res.json({ success: true, message: 'Configurazione email salvata' });
+    } else {
+      res.status(500).json({ error: 'Errore durante il salvataggio della configurazione' });
+    }
+  });
+});
+
+// POST - Test invio email (solo admin)
+app.post('/api/email/test', async (req, res) => {
+  const { adminId, testEmail } = req.body;
+  
+  // Verifica admin
+  db.get('SELECT * FROM employees WHERE id = ? AND isAdmin = 1', [adminId], async (err, admin) => {
+    if (err || !admin) {
+      res.status(403).json({ error: 'Unauthorized: Not an admin' });
+      return;
+    }
+    
+    const config = loadEmailConfig();
+    
+    if (!config.emailEnabled) {
+      res.status(400).json({ error: 'Email non abilitate nella configurazione' });
+      return;
+    }
+    
+    try {
+      const transporter = createEmailTransporter();
+      
+      if (!transporter) {
+        res.status(400).json({ error: 'Configurazione SMTP non valida' });
+        return;
+      }
+      
+      const mailOptions = {
+        from: `"${config.fromName}" <${config.fromEmail}>`,
+        to: testEmail || admin.email,
+        subject: 'Test Email - Sistema Timbrature',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+              <h1 style="color: white; margin: 0; font-size: 24px;">✅ Test Email Riuscito</h1>
+            </div>
+            
+            <div style="background: #f8f9fa; padding: 30px; border-radius: 0 0 10px 10px;">
+              <p style="font-size: 16px; color: #333; margin-bottom: 20px;">
+                Gentile <strong>${admin.name}</strong>,
+              </p>
+              
+              <p style="font-size: 14px; color: #666; line-height: 1.6; margin-bottom: 20px;">
+                Questo è un messaggio di test per verificare il corretto funzionamento del sistema di invio email automatico.
+              </p>
+              
+              <div style="background: white; padding: 20px; border-radius: 8px; border-left: 4px solid #28a745; margin-bottom: 20px;">
+                <p style="margin: 0; color: #555; font-size: 14px;">
+                  <strong style="color: #28a745;">✓ Configurazione corretta</strong><br>
+                  Il sistema è in grado di inviare email correttamente.
+                </p>
+              </div>
+              
+              <p style="font-size: 13px; color: #999; line-height: 1.6; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+                <em>Email di test inviata il ${new Date().toLocaleString('it-IT')}.</em>
+              </p>
+            </div>
+          </div>
+        `
+      };
+      
+      await transporter.sendMail(mailOptions);
+      
+      res.json({ 
+        success: true, 
+        message: `Email di test inviata a ${testEmail || admin.email}` 
+      });
+      
+    } catch (error) {
+      console.error('Error sending test email:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
+// POST - Invio manuale report giornaliero (solo admin)
+app.post('/api/email/send-daily-report', async (req, res) => {
+  const { adminId } = req.body;
+  
+  // Verifica admin
+  db.get('SELECT * FROM employees WHERE id = ? AND isAdmin = 1', [adminId], async (err, admin) => {
+    if (err || !admin) {
+      res.status(403).json({ error: 'Unauthorized: Not an admin' });
+      return;
+    }
+    
+    try {
+      await sendDailyReportToAdmins();
+      res.json({ 
+        success: true, 
+        message: 'Report giornaliero inviato a tutti gli amministratori' 
+      });
+    } catch (error) {
+      console.error('Error sending daily report:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
+// ==================== END EMAIL API ====================
 
 // Start server
 app.listen(port, () => {

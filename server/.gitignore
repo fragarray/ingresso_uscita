@@ -17,6 +17,9 @@ npm-debug.log*
 .env
 .env.local
 
+# Email configuration (contiene password SMTP)
+email_config.json
+
 # Test files
 *test*.js
 *_test.js

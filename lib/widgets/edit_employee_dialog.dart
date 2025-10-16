@@ -23,6 +23,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
   late TextEditingController _passwordController;
   bool _isLoading = false;
   late bool _isAdmin;
+  late bool _allowNightShift;
   bool _changePassword = false;
 
   @override
@@ -32,6 +33,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
     _emailController = TextEditingController(text: widget.employee.email);
     _passwordController = TextEditingController();
     _isAdmin = widget.employee.isAdmin;
+    _allowNightShift = widget.employee.allowNightShift;
   }
 
   @override
@@ -54,6 +56,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
         email: _emailController.text.trim(),
         password: _changePassword ? _passwordController.text : null,
         isAdmin: _isAdmin,
+        allowNightShift: _allowNightShift,
       );
 
       final success = await ApiService.updateEmployee(updatedEmployee);
@@ -211,6 +214,21 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
                 secondary: const Icon(Icons.admin_panel_settings, color: Colors.red),
+              ),
+              
+              // Checkbox turni notturni
+              CheckboxListTile(
+                title: const Text('Autorizza turni notturni'),
+                subtitle: const Text('Può lavorare oltre la mezzanotte (no auto-logout)'),
+                value: _allowNightShift,
+                onChanged: (value) {
+                  setState(() {
+                    _allowNightShift = value ?? false;
+                  });
+                },
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                secondary: const Icon(Icons.nights_stay, color: Colors.indigo),
               ),
             ],
           ),

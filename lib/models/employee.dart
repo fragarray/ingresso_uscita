@@ -6,6 +6,7 @@ class Employee {
   final bool isAdmin;
   final bool isActive;
   final DateTime? deletedAt;
+  final bool allowNightShift; // Autorizzazione turni notturni oltre mezzanotte
 
   Employee({
     this.id, 
@@ -15,6 +16,7 @@ class Employee {
     this.isAdmin = false,
     this.isActive = true,
     this.deletedAt,
+    this.allowNightShift = false,
   });
 
   Map<String, dynamic> toMap() {
@@ -23,6 +25,7 @@ class Employee {
       'email': email,
       'isAdmin': isAdmin ? 1 : 0,
       'isActive': isActive ? 1 : 0,
+      'allowNightShift': allowNightShift ? 1 : 0,
     };
     
     if (id != null) map['id'] = id;
@@ -40,6 +43,7 @@ class Employee {
       isAdmin: map['isAdmin'] == 1,
       isActive: (map['isActive'] ?? 1) == 1,
       deletedAt: map['deletedAt'] != null ? DateTime.parse(map['deletedAt']) : null,
+      allowNightShift: (map['allowNightShift'] ?? 0) == 1,
     );
   }
 }

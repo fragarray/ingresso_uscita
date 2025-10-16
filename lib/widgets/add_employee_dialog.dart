@@ -18,6 +18,7 @@ class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   bool _isAdmin = false;
+  bool _allowNightShift = false;
 
   @override
   void dispose() {
@@ -38,6 +39,7 @@ class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
         email: _emailController.text.trim(),
         password: _passwordController.text,
         isAdmin: _isAdmin,
+        allowNightShift: _allowNightShift,
       );
 
       final success = await ApiService.addEmployee(newEmployee);
@@ -126,6 +128,18 @@ class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
               onChanged: (value) {
                 setState(() {
                   _isAdmin = value ?? false;
+                });
+              },
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+            ),
+            CheckboxListTile(
+              title: const Text('Autorizza turni notturni'),
+              subtitle: const Text('Può lavorare oltre la mezzanotte (no auto-logout)'),
+              value: _allowNightShift,
+              onChanged: (value) {
+                setState(() {
+                  _allowNightShift = value ?? false;
                 });
               },
               contentPadding: EdgeInsets.zero,
