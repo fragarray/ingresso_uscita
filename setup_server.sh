@@ -137,7 +137,19 @@ echo -e "${GREEN}✓ File scaricati con successo${NC}"
 echo -e "${YELLOW}[7/7] Installazione dipendenze npm...${NC}"
 npm install
 
-echo -e "${GREEN}✓ Dipendenze installate${NC}"
+# Verifica che nodemailer sia installato correttamente
+echo -e "${YELLOW}Verifica installazione nodemailer...${NC}"
+NODE_CHECK=$(node -e "const nm = require('nodemailer'); console.log(typeof nm.createTransport);" 2>&1)
+if [ "$NODE_CHECK" = "function" ]; then
+    echo -e "${GREEN}✓ nodemailer installato correttamente${NC}"
+else
+    echo -e "${YELLOW}⚠ Reinstallazione nodemailer...${NC}"
+    npm uninstall nodemailer
+    npm install nodemailer@6.9.7
+    echo -e "${GREEN}✓ nodemailer reinstallato${NC}"
+fi
+
+echo -e "${GREEN}✓ Tutte le dipendenze installate correttamente${NC}"
 
 # Verifica che tutti i file necessari siano presenti
 echo ""
@@ -179,11 +191,13 @@ echo ""
 echo -e "${YELLOW}🌐 Indirizzo IP del server:${NC}"
 echo -e "   ${GREEN}${IP_ADDRESS}${NC}"
 echo ""
-echo -e "${YELLOW}🚀 Per avviare il server:${NC}"
+echo -e "${YELLOW}🚀 Per avviare il server manualmente:${NC}"
 echo -e "   ${GREEN}cd ${PROJECT_DIR}${NC}"
 echo -e "   ${GREEN}node server.js${NC}"
 echo ""
-echo -e "${YELLOW}🔧 Per avviare il server in background (con PM2):${NC}"
+echo -e "${YELLOW}🔧 Opzioni di gestione server:${NC}"
+echo ""
+echo -e "${BLUE}Opzione 1 - PM2 (Process Manager):${NC}"
 echo -e "   ${GREEN}npm install -g pm2${NC}"
 echo -e "   ${GREEN}cd ${PROJECT_DIR}${NC}"
 echo -e "   ${GREEN}pm2 start server.js --name ingresso-uscita${NC}"
@@ -195,6 +209,18 @@ echo -e "   ${GREEN}pm2 status${NC}           ${BLUE}# Stato dei processi${NC}"
 echo -e "   ${GREEN}pm2 logs${NC}             ${BLUE}# Visualizza i log${NC}"
 echo -e "   ${GREEN}pm2 restart all${NC}      ${BLUE}# Riavvia i processi${NC}"
 echo -e "   ${GREEN}pm2 stop all${NC}         ${BLUE}# Ferma i processi${NC}"
+echo ""
+echo -e "${BLUE}Opzione 2 - systemd (Servizio di Sistema):${NC}"
+echo -e "   ${YELLOW}Il setup ti chiederà se vuoi configurare automaticamente systemd${NC}"
+echo -e "   ${YELLOW}In alternativa, crea manualmente:${NC} ${GREEN}/etc/systemd/system/ingresso-uscita.service${NC}"
+echo ""
+echo -e "${YELLOW}📊 Comandi utili systemd:${NC}"
+echo -e "   ${GREEN}sudo systemctl start ingresso-uscita${NC}    ${BLUE}# Avvia${NC}"
+echo -e "   ${GREEN}sudo systemctl stop ingresso-uscita${NC}     ${BLUE}# Ferma${NC}"
+echo -e "   ${GREEN}sudo systemctl restart ingresso-uscita${NC}  ${BLUE}# Riavvia${NC}"
+echo -e "   ${GREEN}sudo systemctl status ingresso-uscita${NC}   ${BLUE}# Stato${NC}"
+echo -e "   ${GREEN}sudo systemctl enable ingresso-uscita${NC}   ${BLUE}# Avvio automatico${NC}"
+echo -e "   ${GREEN}sudo journalctl -u ingresso-uscita -f${NC}   ${BLUE}# Log in tempo reale${NC}"
 echo ""
 echo -e "${YELLOW}⚙️  Configurazione app Flutter:${NC}"
 echo -e "   Nell'app, vai in ${GREEN}Impostazioni${NC} e imposta l'indirizzo IP:"
@@ -213,28 +239,136 @@ echo ""
 echo -e "${YELLOW}📝 Note:${NC}"
 echo -e "   • Il server sarà accessibile sulla porta 3000"
 echo -e "   • Assicurati che il firewall permetta connessioni sulla porta 3000"
-echo -e "   • Per Raspberry Pi, è consigliato usare PM2 per gestire il server"
-echo -e "   • I log del server sono disponibili con 'pm2 logs'"
+echo -e "   • I log del server sono disponibili nei file di log o con i comandi del gestore scelto"
 echo ""
-
-# Chiedi se si vuole installare PM2
-read -p "$(echo -e ${YELLOW}Vuoi installare PM2 per la gestione del server? [s/N] ${NC})" -n 1 -r
-echo
-if [[ $REPLY =~ ^[Ss]$ ]]; then
-    echo -e "${YELLOW}Installazione PM2...${NC}"
-    sudo npm install -g pm2
-    echo -e "${GREEN}✓ PM2 installato${NC}"
-    
-    read -p "$(echo -e ${YELLOW}Vuoi avviare il server con PM2 ora? [s/N] ${NC})" -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Ss]$ ]]; then
-        pm2 start server.js --name ingresso-uscita
-        pm2 save
-        echo -e "${GREEN}✓ Server avviato con PM2${NC}"
-        echo -e "${YELLOW}Esegui 'pm2 startup' per configurare l'avvio automatico${NC}"
-    fi
-fi
 
 echo ""
 echo -e "${GREEN}✨ Installazione completata! Buon lavoro! ✨${NC}"
 echo ""
+
+# ==================== FUNZIONE PER CREARE SERVIZIO SYSTEMD ====================
+create_systemd_service() {
+    local SERVICE_NAME="ingresso-uscita"
+    local SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+    
+    echo -e "${YELLOW}Creazione servizio systemd...${NC}"
+    
+    # Crea il file di configurazione (basato sul tuo systemctl funzionante)
+    sudo tee "$SERVICE_FILE" > /dev/null <<EOF
+[Unit]
+Description=Server Ingresso/Uscita - Sistema Gestione Presenze
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=$PROJECT_DIR
+ExecStart=$(which node) $PROJECT_DIR/server.js
+Restart=always
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=ingresso-uscita
+
+# Variabili d'ambiente
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+# Limiti di sicurezza (opzionali)
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # Ricarica systemd
+    sudo systemctl daemon-reload
+    
+    echo -e "${GREEN}✓ Servizio systemd creato: ${SERVICE_NAME}${NC}"
+    echo -e "${BLUE}File di configurazione: ${SERVICE_FILE}${NC}"
+    echo ""
+    echo -e "${YELLOW}Comandi disponibili:${NC}"
+    echo -e "   ${GREEN}sudo systemctl start ${SERVICE_NAME}${NC}      ${BLUE}# Avvia il server${NC}"
+    echo -e "   ${GREEN}sudo systemctl stop ${SERVICE_NAME}${NC}       ${BLUE}# Ferma il server${NC}"
+    echo -e "   ${GREEN}sudo systemctl restart ${SERVICE_NAME}${NC}    ${BLUE}# Riavvia il server${NC}"
+    echo -e "   ${GREEN}sudo systemctl status ${SERVICE_NAME}${NC}     ${BLUE}# Stato del server${NC}"
+    echo -e "   ${GREEN}sudo systemctl enable ${SERVICE_NAME}${NC}     ${BLUE}# Abilita avvio automatico${NC}"
+    echo -e "   ${GREEN}sudo systemctl disable ${SERVICE_NAME}${NC}    ${BLUE}# Disabilita avvio automatico${NC}"
+    echo ""
+    echo -e "${YELLOW}Log del server:${NC}"
+    echo -e "   ${GREEN}sudo journalctl -u ${SERVICE_NAME} -f${NC}              ${BLUE}# Log in tempo reale${NC}"
+    echo -e "   ${GREEN}sudo journalctl -t ingresso-uscita -f${NC}              ${BLUE}# Log filtrati per tag${NC}"
+    echo -e "   ${GREEN}sudo journalctl -u ${SERVICE_NAME} -n 100${NC}          ${BLUE}# Ultimi 100 log${NC}"
+    echo -e "   ${GREEN}sudo journalctl -u ${SERVICE_NAME} --since today${NC}   ${BLUE}# Log di oggi${NC}"
+    echo ""
+    
+    read -p "$(echo -e ${YELLOW}Vuoi abilitare l\'avvio automatico? [s/N] ${NC})" -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Ss]$ ]]; then
+        sudo systemctl enable "$SERVICE_NAME"
+        echo -e "${GREEN}✓ Avvio automatico abilitato${NC}"
+    fi
+    
+    read -p "$(echo -e ${YELLOW}Vuoi avviare il server ora? [s/N] ${NC})" -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Ss]$ ]]; then
+        sudo systemctl start "$SERVICE_NAME"
+        sleep 2
+        sudo systemctl status "$SERVICE_NAME" --no-pager
+        echo -e "${GREEN}✓ Server avviato${NC}"
+    fi
+}
+
+# ==================== MENU SCELTA GESTIONE SERVER ====================
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}Scegli come vuoi gestire il server:${NC}"
+echo ""
+echo -e "${GREEN}1)${NC} Avvio manuale (node server.js)"
+echo -e "${GREEN}2)${NC} PM2 (process manager con monitoraggio)"
+echo -e "${GREEN}3)${NC} systemd (servizio di sistema nativo Linux)"
+echo -e "${GREEN}4)${NC} Nessuno (configuro dopo)"
+echo ""
+read -p "$(echo -e ${YELLOW}Scelta [1-4]: ${NC})" CHOICE
+
+case $CHOICE in
+    1)
+        echo -e "${YELLOW}Hai scelto avvio manuale${NC}"
+        echo -e "${GREEN}Per avviare il server:${NC}"
+        echo -e "   cd ${PROJECT_DIR}"
+        echo -e "   node server.js"
+        ;;
+    2)
+        echo -e "${YELLOW}Installazione PM2...${NC}"
+        if ! command -v pm2 &> /dev/null; then
+            sudo npm install -g pm2
+            echo -e "${GREEN}✓ PM2 installato${NC}"
+        else
+            echo -e "${GREEN}✓ PM2 già installato${NC}"
+        fi
+        
+        read -p "$(echo -e ${YELLOW}Vuoi avviare il server con PM2 ora? [s/N] ${NC})" -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Ss]$ ]]; then
+            pm2 start server.js --name ingresso-uscita
+            pm2 save
+            echo -e "${GREEN}✓ Server avviato con PM2${NC}"
+            
+            read -p "$(echo -e ${YELLOW}Vuoi configurare l\'avvio automatico con PM2? [s/N] ${NC})" -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Ss]$ ]]; then
+                pm2 startup
+                echo -e "${YELLOW}Esegui il comando mostrato sopra per completare la configurazione${NC}"
+            fi
+        fi
+        ;;
+    3)
+        create_systemd_service
+        ;;
+    4)
+        echo -e "${YELLOW}Nessuna configurazione automatica${NC}"
+        ;;
+    *)
+        echo -e "${RED}Scelta non valida${NC}"
+        ;;
+esac
