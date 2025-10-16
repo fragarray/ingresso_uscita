@@ -19,6 +19,7 @@ class PersonnelTab extends StatefulWidget {
 class _PersonnelTabState extends State<PersonnelTab> {
   List<Employee> _employees = [];
   List<Employee> _filteredEmployees = [];
+  List<WorkSite> _workSites = [];
   Employee? _selectedEmployee;
   List<AttendanceRecord> _employeeAttendance = [];
   Map<int, bool> _employeeClockedInStatus = {}; // employeeId -> is clocked in
@@ -85,6 +86,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
     setState(() => _isLoading = true);
     try {
       final employees = await ApiService.getEmployees();
+      final workSites = await ApiService.getWorkSites();
       final allAttendance = await ApiService.getAttendanceRecords();
 
       // Calcola lo stato di timbratura per ogni dipendente
@@ -105,6 +107,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
       if (!mounted) return;
       setState(() {
         _employees = employees;
+        _workSites = workSites;
         _filteredEmployees = List.from(employees);
         _employeeClockedInStatus = statusMap;
         _selectedEmployee = null;
@@ -147,6 +150,55 @@ class _PersonnelTabState extends State<PersonnelTab> {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  // Crea coppie IN/OUT dai record di presenza
+  List<Map<String, dynamic>> _createAttendancePairs() {
+    final pairs = <Map<String, dynamic>>[];
+    AttendanceRecord? lastIn;
+    
+    for (var record in _employeeAttendance) {
+      if (record.type == 'in') {
+        // Se c'è già un IN senza OUT, lo aggiungiamo come singolo
+        if (lastIn != null) {
+          pairs.add({
+            'in': lastIn,
+            'out': null,
+            'isMixed': false,
+          });
+        }
+        lastIn = record;
+      } else if (record.type == 'out') {
+        if (lastIn != null) {
+          // Verifica se i cantieri sono diversi
+          final isMixed = lastIn.workSiteId != record.workSiteId;
+          pairs.add({
+            'in': lastIn,
+            'out': record,
+            'isMixed': isMixed,
+          });
+          lastIn = null;
+        } else {
+          // OUT senza IN precedente - lo aggiungiamo come singolo
+          pairs.add({
+            'in': null,
+            'out': record,
+            'isMixed': false,
+          });
+        }
+      }
+    }
+    
+    // Se c'è un IN finale senza OUT
+    if (lastIn != null) {
+      pairs.add({
+        'in': lastIn,
+        'out': null,
+        'isMixed': false,
+      });
+    }
+    
+    return pairs;
   }
 
   Future<void> _removeEmployee(Employee employee) async {
@@ -675,14 +727,25 @@ class _PersonnelTabState extends State<PersonnelTab> {
       return;
     }
 
-    // Determina lo stato attuale del dipendente
+    // Determina lo stato attuale del dipendente e il cantiere dove è timbrato
     final records = await ApiService.getAttendanceRecords(
       employeeId: employee.id!,
     );
     final currentlyClockedIn = records.isNotEmpty && records.first.type == 'in';
+    final currentWorkSiteId = currentlyClockedIn ? records.first.workSiteId : null;
 
     // Dialog per selezionare cantiere e tipo
-    WorkSite? selectedWorkSite = workSites.first;
+    // Preseleziona il cantiere corrente se il dipendente è timbrato IN
+    WorkSite? selectedWorkSite;
+    if (currentWorkSiteId != null) {
+      selectedWorkSite = workSites.firstWhere(
+        (ws) => ws.id == currentWorkSiteId,
+        orElse: () => workSites.first,
+      );
+    } else {
+      selectedWorkSite = workSites.first;
+    }
+    
     String selectedType = 'in'; // Default a INGRESSO (l'admin può cambiare)
     final notesController = TextEditingController();
 
@@ -841,14 +904,64 @@ class _PersonnelTabState extends State<PersonnelTab> {
                 const SizedBox(height: 8),
                 DropdownButtonFormField<WorkSite>(
                   value: selectedWorkSite,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.location_on),
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.location_on),
+                    fillColor: currentWorkSiteId != null && selectedWorkSite?.id == currentWorkSiteId
+                        ? Colors.green[50]
+                        : null,
+                    filled: currentWorkSiteId != null && selectedWorkSite?.id == currentWorkSiteId,
                   ),
                   items: workSites.map((ws) {
+                    final isCurrentWorkSite = currentWorkSiteId != null && ws.id == currentWorkSiteId;
                     return DropdownMenuItem<WorkSite>(
                       value: ws,
-                      child: Text(ws.name),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isCurrentWorkSite)
+                            Container(
+                              margin: const EdgeInsets.only(right: 8),
+                              padding: const EdgeInsets.all(4),
+                              decoration: const BoxDecoration(
+                                color: Colors.green,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.check,
+                                size: 12,
+                                color: Colors.white,
+                              ),
+                            ),
+                          Flexible(
+                            child: Text(
+                              ws.name,
+                              style: TextStyle(
+                                fontWeight: isCurrentWorkSite ? FontWeight.bold : FontWeight.normal,
+                                color: isCurrentWorkSite ? Colors.green[700] : null,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (isCurrentWorkSite)
+                            Container(
+                              margin: const EdgeInsets.only(left: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.green,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'ATTUALE',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
                     );
                   }).toList(),
                   onChanged: (value) {
@@ -1422,7 +1535,18 @@ class _PersonnelTabState extends State<PersonnelTab> {
 
         if (outSuccess) {
           // Entrambe salvate con successo
-          context.read<AppState>().triggerRefresh();
+          // Aggiungi delay per consistenza database
+          await Future.delayed(const Duration(milliseconds: 300));
+          
+          // Trigger refresh generale per aggiornare tutti i dati
+          if (mounted) {
+            context.read<AppState>().triggerRefresh();
+          }
+          
+          // Ricarica solo lo storico del dipendente selezionato
+          if (_selectedEmployee?.id == employee.id) {
+            await _loadEmployeeAttendance(employee);
+          }
 
           if (!mounted) return;
 
@@ -1439,7 +1563,18 @@ class _PersonnelTabState extends State<PersonnelTab> {
           );
         } else {
           // IN salvato ma OUT fallito
-          context.read<AppState>().triggerRefresh();
+          // Aggiungi delay per consistenza database
+          await Future.delayed(const Duration(milliseconds: 300));
+          
+          // Trigger refresh generale per aggiornare tutti i dati
+          if (mounted) {
+            context.read<AppState>().triggerRefresh();
+          }
+          
+          // Ricarica solo lo storico del dipendente selezionato
+          if (_selectedEmployee?.id == employee.id) {
+            await _loadEmployeeAttendance(employee);
+          }
 
           if (!mounted) return;
 
@@ -1455,7 +1590,18 @@ class _PersonnelTabState extends State<PersonnelTab> {
         }
       } else {
         // Solo IN salvato
-        context.read<AppState>().triggerRefresh();
+        // Aggiungi delay per consistenza database
+        await Future.delayed(const Duration(milliseconds: 300));
+        
+        // Trigger refresh generale per aggiornare tutti i dati
+        if (mounted) {
+          context.read<AppState>().triggerRefresh();
+        }
+        
+        // Ricarica solo lo storico del dipendente selezionato
+        if (_selectedEmployee?.id == employee.id) {
+          await _loadEmployeeAttendance(employee);
+        }
 
         if (!mounted) return;
 
@@ -1591,15 +1737,9 @@ class _PersonnelTabState extends State<PersonnelTab> {
     WorkSite workSite,
     DateTime inDateTime,
   ) async {
-    // Suggerisci ora di uscita (es: 8 ore dopo l'ingresso)
-    final suggestedOut = inDateTime.add(const Duration(hours: 8));
-    DateTime outDateTime = DateTime(
-      inDateTime.year,
-      inDateTime.month,
-      inDateTime.day,
-      suggestedOut.hour,
-      suggestedOut.minute,
-    );
+    // Suggerisci ora di uscita (8 ore dopo l'ingresso)
+    // IMPORTANTE: consideriamo il cambio del giorno se le 8 ore sforano
+    DateTime outDateTime = inDateTime.add(const Duration(hours: 8));
 
     final notesController = TextEditingController();
 
@@ -1645,10 +1785,75 @@ class _PersonnelTabState extends State<PersonnelTab> {
                 ),
                 const SizedBox(height: 16),
                 const Text(
-                  'Seleziona ora di uscita:',
+                  'Data e ora di uscita:',
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
+                // Selettore DATA uscita
+                InkWell(
+                  onTap: () async {
+                    final date = await showDatePicker(
+                      context: context,
+                      initialDate: outDateTime,
+                      firstDate: inDateTime,
+                      lastDate: inDateTime.add(const Duration(days: 2)),
+                    );
+                    if (date != null) {
+                      setState(() {
+                        outDateTime = DateTime(
+                          date.year,
+                          date.month,
+                          date.day,
+                          outDateTime.hour,
+                          outDateTime.minute,
+                        );
+                      });
+                    }
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.red[300]!),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.calendar_today,
+                          color: Colors.red,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Data:',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${outDateTime.day.toString().padLeft(2, '0')}/${outDateTime.month.toString().padLeft(2, '0')}/${outDateTime.year}',
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.arrow_drop_down, color: Colors.red),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // Selettore ORA uscita
                 InkWell(
                   onTap: () async {
                     final time = await showTimePicker(
@@ -1666,9 +1871,9 @@ class _PersonnelTabState extends State<PersonnelTab> {
                     if (time != null) {
                       setState(() {
                         outDateTime = DateTime(
-                          inDateTime.year,
-                          inDateTime.month,
-                          inDateTime.day,
+                          outDateTime.year,
+                          outDateTime.month,
+                          outDateTime.day,
                           time.hour,
                           time.minute,
                         );
@@ -1777,11 +1982,18 @@ class _PersonnelTabState extends State<PersonnelTab> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 900;
+
+    return Stack(
       children: [
-        Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: ElevatedButton.icon(
+        // Layout principale - verticale per mobile, orizzontale per desktop
+        isMobile ? _buildMobileLayout() : _buildDesktopLayout(),
+        // FloatingActionButton per aggiungere dipendente
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: FloatingActionButton(
             onPressed: () {
               showDialog(
                 context: context,
@@ -1789,15 +2001,17 @@ class _PersonnelTabState extends State<PersonnelTab> {
                     AddEmployeeDialog(onEmployeeAdded: _loadEmployees),
               );
             },
-            icon: const Icon(Icons.add),
-            label: const Text('Nuovo Dipendente'),
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            ),
+            tooltip: 'Nuovo Dipendente',
+            child: const Icon(Icons.person_add),
           ),
         ),
-        Expanded(
-          child: Row(
+      ],
+    );
+  }
+
+  // Layout orizzontale per desktop (larghezza >= 900px)
+  Widget _buildDesktopLayout() {
+    return Row(
             children: [
               // Lista dipendenti con larghezza dinamica
               SizedBox(
@@ -2133,6 +2347,18 @@ class _PersonnelTabState extends State<PersonnelTab> {
                                 itemBuilder: (context, index) {
                                   final record = _employeeAttendance[index];
                                   final isForced = record.isForced;
+                                  
+                                  // Trova il cantiere associato
+                                  final workSite = _workSites.firstWhere(
+                                    (ws) => ws.id == record.workSiteId,
+                                    orElse: () => WorkSite(
+                                      id: 0,
+                                      name: 'Cantiere sconosciuto',
+                                      address: '',
+                                      latitude: 0,
+                                      longitude: 0,
+                                    ),
+                                  );
 
                                   return Card(
                                     margin: const EdgeInsets.symmetric(
@@ -2205,10 +2431,24 @@ class _PersonnelTabState extends State<PersonnelTab> {
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                          Text(
-                                            isForced
-                                                ? 'Timbratura forzata (GPS: 0.0, 0.0)'
-                                                : 'Lat: ${record.latitude.toStringAsFixed(6)}, Lng: ${record.longitude.toStringAsFixed(6)}',
+                                          Row(
+                                            children: [
+                                              Icon(
+                                                Icons.location_on,
+                                                size: 14,
+                                                color: Colors.grey[600],
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Expanded(
+                                                child: Text(
+                                                  workSite.name,
+                                                  style: TextStyle(
+                                                    color: Colors.grey[700],
+                                                  ),
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                           if (isForced &&
                                               record.deviceInfo.isNotEmpty)
@@ -2238,9 +2478,798 @@ class _PersonnelTabState extends State<PersonnelTab> {
                 ),
               ),
             ],
+          );
+  }
+
+  // Layout verticale per mobile (larghezza < 900px)
+  Widget _buildMobileLayout() {
+    return Column(
+      children: [
+        // Lista dipendenti in alto con altezza dinamica
+        SizedBox(
+          height: context.watch<AppState>().personnelTabDividerWidth,
+          child: _buildEmployeeListCard(),
+        ),
+        // Divisore ridimensionabile orizzontale
+        MouseRegion(
+          cursor: SystemMouseCursors.resizeRow,
+          child: GestureDetector(
+            onVerticalDragUpdate: (details) {
+              final appState = context.read<AppState>();
+              double newHeight =
+                  appState.personnelTabDividerWidth + details.delta.dy;
+              // Limita l'altezza tra 150 e 500 pixel
+              newHeight = newHeight.clamp(150.0, 500.0);
+              appState.setPersonnelTabDividerWidth(newHeight);
+            },
+            child: Container(
+              height: 8,
+              color: Colors.transparent,
+              child: Center(
+                child: Container(
+                  height: 3,
+                  decoration: BoxDecoration(
+                    color: Colors.grey[400],
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+            ),
           ),
+        ),
+        // Dettaglio presenze in basso
+        Expanded(
+          child: _buildAttendanceDetailCard(),
         ),
       ],
     );
   }
+
+  // Card con la lista dipendenti (riutilizzata da entrambi i layout)
+  Widget _buildEmployeeListCard() {
+    return Card(
+      margin: const EdgeInsets.all(8.0),
+      child: Column(
+        children: [
+          // Campo di ricerca
+          Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Cerca dipendente...',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          _searchController.clear();
+                        },
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+              ),
+            ),
+          ),
+          // Contatore risultati
+          if (_searchController.text.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12.0),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: Colors.blue[700],
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${_filteredEmployees.length} risultati',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.blue[700],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 8),
+          // Lista dipendenti filtrata
+          Expanded(
+            child: _isLoading && _selectedEmployee == null
+                ? const Center(child: CircularProgressIndicator())
+                : _filteredEmployees.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.search_off,
+                              size: 48,
+                              color: Colors.grey[400],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Nessun dipendente trovato',
+                              style: TextStyle(color: Colors.grey[600]),
+                            ),
+                          ],
+                        ),
+                      )
+                    : _buildEmployeeList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Card con il dettaglio presenze (riutilizzata da entrambi i layout)
+  Widget _buildAttendanceDetailCard() {
+    return Card(
+      margin: const EdgeInsets.all(8.0),
+      child: _selectedEmployee == null
+          ? const Center(child: Text('Seleziona un dipendente'))
+          : _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _buildAttendanceDetail(),
+    );
+  }
+
+  // Lista dipendenti (estratta per riutilizzo)
+  Widget _buildEmployeeList() {
+    return ListView.builder(
+      itemCount: _filteredEmployees.length,
+      itemBuilder: (context, index) {
+        final employee = _filteredEmployees[index];
+        final isSelected = _selectedEmployee?.id == employee.id;
+        final isClockedIn = _employeeClockedInStatus[employee.id] ?? false;
+
+        return Card(
+          margin: const EdgeInsets.symmetric(
+            horizontal: 8,
+            vertical: 4,
+          ),
+          color: isSelected
+              ? Theme.of(context).colorScheme.primaryContainer
+              : isClockedIn
+                  ? Colors.green[50]
+                  : null,
+          elevation: isClockedIn ? 3 : 1,
+          child: InkWell(
+            onTap: () => _loadEmployeeAttendance(employee),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Row(
+                children: [
+                  // Avatar
+                  CircleAvatar(
+                    backgroundColor: isClockedIn ? Colors.green : null,
+                    foregroundColor: isClockedIn ? Colors.white : null,
+                    child: isClockedIn
+                        ? const Icon(Icons.check, size: 20)
+                        : Text(employee.name[0].toUpperCase()),
+                  ),
+                  const SizedBox(width: 12),
+                  // Informazioni dipendente
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                employee.name,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (employee.isAdmin) ...[
+                              const SizedBox(width: 3),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 5,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.blue,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text(
+                                  'ADMIN',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          employee.email,
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (isClockedIn) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.access_time,
+                                size: 12,
+                                color: Colors.green[700],
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Timbrato IN',
+                                style: TextStyle(
+                                  color: Colors.green[700],
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  // Indicatore visivo per selezione/stato
+                  if (isSelected || isClockedIn)
+                    Icon(
+                      isSelected ? Icons.chevron_right : Icons.check_circle,
+                      color: isSelected
+                          ? Theme.of(context).colorScheme.primary
+                          : Colors.green,
+                      size: 24,
+                    ),
+                  // Pulsanti azione
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.edit, size: 20),
+                        tooltip: 'Modifica dipendente',
+                        onPressed: () {
+                          showDialog(
+                            context: context,
+                            builder: (context) => EditEmployeeDialog(
+                              employee: employee,
+                              onEmployeeUpdated: _loadEmployees,
+                            ),
+                          );
+                        },
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete, size: 20, color: Colors.red),
+                        tooltip: 'Elimina dipendente',
+                        onPressed: () => _removeEmployee(employee),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Dettaglio presenze (estratto per riutilizzo)
+  Widget _buildAttendanceDetail() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Header elegante con sfondo sfumato
+        Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Theme.of(context).colorScheme.primaryContainer,
+                Theme.of(context).colorScheme.primaryContainer.withOpacity(0.3),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(12),
+              topRight: Radius.circular(12),
+            ),
+          ),
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.history,
+                    size: 24,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Storico Presenze',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _selectedEmployee!.name,
+                          style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                color: Colors.grey[700],
+                              ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: () => _forceAttendance(_selectedEmployee!),
+                    icon: const Icon(Icons.admin_panel_settings, size: 18),
+                    label: const Text('Forza'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                      elevation: 2,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _employeeAttendance.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.event_busy,
+                        size: 64,
+                        color: Colors.grey[400],
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Nessuna timbratura',
+                        style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.grey[600],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.all(8),
+                  itemCount: _createAttendancePairs().length,
+                  itemBuilder: (context, index) {
+                    final pair = _createAttendancePairs()[index];
+                    final inRecord = pair['in'] as AttendanceRecord?;
+                    final outRecord = pair['out'] as AttendanceRecord?;
+                    final isMixed = pair['isMixed'] as bool;
+                    
+                    // Se è una coppia completa
+                    if (inRecord != null && outRecord != null) {
+                      return _buildSessionPairCard(inRecord, outRecord, isMixed);
+                    }
+                    // Se è solo IN (dipendente attualmente timbrato)
+                    else if (inRecord != null) {
+                      return _buildSingleRecordCard(inRecord, isIn: true);
+                    }
+                    // Se è solo OUT (anomalia)
+                    else if (outRecord != null) {
+                      return _buildSingleRecordCard(outRecord, isIn: false);
+                    }
+                    
+                    
+                    return const SizedBox.shrink();
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  // Costruisce una card per una coppia completa IN/OUT
+  Widget _buildSessionPairCard(AttendanceRecord inRecord, AttendanceRecord outRecord, bool isMixed) {
+    final inWorkSite = _workSites.firstWhere(
+      (ws) => ws.id == inRecord.workSiteId,
+      orElse: () => WorkSite(id: 0, name: 'Sconosciuto', address: '', latitude: 0, longitude: 0),
+    );
+    final outWorkSite = _workSites.firstWhere(
+      (ws) => ws.id == outRecord.workSiteId,
+      orElse: () => WorkSite(id: 0, name: 'Sconosciuto', address: '', latitude: 0, longitude: 0),
+    );
+    
+    // Calcola durata
+    final duration = outRecord.timestamp.difference(inRecord.timestamp);
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes % 60;
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isMixed ? Colors.orange.withOpacity(0.3) : Colors.blue.withOpacity(0.3),
+          width: 2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 6,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Header con data e durata
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: isMixed ? Colors.orange[50] : Colors.blue[50],
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(10),
+                topRight: Radius.circular(10),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.calendar_today,
+                  size: 16,
+                  color: isMixed ? Colors.orange[700] : Colors.blue[700],
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  DateFormat('dd/MM/yyyy').format(inRecord.timestamp.toLocal()),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: isMixed ? Colors.orange[900] : Colors.blue[900],
+                  ),
+                ),
+                const Spacer(),
+                if (isMixed)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.orange,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'CANTIERI MISTI',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                const SizedBox(width: 8),
+                Icon(Icons.schedule, size: 16, color: Colors.grey[600]),
+                const SizedBox(width: 4),
+                Text(
+                  '${hours}h ${minutes}m',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey[800],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Contenuto IN/OUT
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                // IN
+                Expanded(
+                  child: _buildMiniRecord(inRecord, inWorkSite, isIn: true),
+                ),
+                // Freccia
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Icon(Icons.arrow_forward, color: Colors.grey[400], size: 20),
+                ),
+                // OUT
+                Expanded(
+                  child: _buildMiniRecord(outRecord, outWorkSite, isIn: false),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Mini card per singolo record (IN o OUT) dentro la coppia
+  Widget _buildMiniRecord(AttendanceRecord record, WorkSite workSite, {required bool isIn}) {
+    final isForced = record.isForced;
+    return Column(
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: isIn ? Colors.green : Colors.red,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Stack(
+            children: [
+              Center(
+                child: Icon(
+                  isIn ? Icons.login : Icons.logout,
+                  color: Colors.white,
+                  size: 24,
+                ),
+              ),
+              if (isForced)
+                Positioned(
+                  right: -2,
+                  top: -2,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: const BoxDecoration(
+                      color: Colors.orange,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.admin_panel_settings,
+                      size: 10,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          isIn ? 'INGRESSO' : 'USCITA',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: isIn ? Colors.green[700] : Colors.red[700],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          DateFormat('HH:mm').format(record.timestamp.toLocal()),
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: Colors.grey[800],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.location_on, size: 10, color: Colors.grey[500]),
+            const SizedBox(width: 2),
+            Flexible(
+              child: Text(
+                workSite.name,
+                style: TextStyle(
+                  fontSize: 10,
+                  color: Colors.grey[600],
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 2,
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // Costruisce una card per un record singolo (IN senza OUT o OUT senza IN)
+  Widget _buildSingleRecordCard(AttendanceRecord record, {required bool isIn}) {
+    final isForced = record.isForced;
+    final workSite = _workSites.firstWhere(
+      (ws) => ws.id == record.workSiteId,
+      orElse: () => WorkSite(id: 0, name: 'Sconosciuto', address: '', latitude: 0, longitude: 0),
+    );
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: isForced
+            ? Colors.orange[50]
+            : isIn
+                ? Colors.green[50]
+                : Colors.red[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isForced
+              ? Colors.orange.withOpacity(0.5)
+              : isIn
+                  ? Colors.green.withOpacity(0.5)
+                  : Colors.red.withOpacity(0.5),
+          width: 2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: isIn ? Colors.green : Colors.red,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Stack(
+                children: [
+                  Center(
+                    child: Icon(
+                      isIn ? Icons.login : Icons.logout,
+                      color: Colors.white,
+                      size: 28,
+                    ),
+                  ),
+                  if (isForced)
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      child: Container(
+                        padding: const EdgeInsets.all(3),
+                        decoration: const BoxDecoration(
+                          color: Colors.orange,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.admin_panel_settings,
+                          size: 12,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        isIn ? 'INGRESSO' : 'USCITA',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: isIn ? Colors.green[700] : Colors.red[700],
+                        ),
+                      ),
+                      if (isForced) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.orange,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            'FORZATA',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (isIn) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.blue,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            'IN CORSO',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(Icons.calendar_today, size: 14, color: Colors.grey[600]),
+                      const SizedBox(width: 4),
+                      Text(
+                        DateFormat('dd/MM/yyyy').format(record.timestamp.toLocal()),
+                        style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                      ),
+                      const SizedBox(width: 12),
+                      Icon(Icons.access_time, size: 14, color: Colors.grey[600]),
+                      const SizedBox(width: 4),
+                      Text(
+                        DateFormat('HH:mm:ss').format(record.timestamp.toLocal()),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(Icons.location_on, size: 14, color: Colors.grey[600]),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          workSite.name,
+                          style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
+

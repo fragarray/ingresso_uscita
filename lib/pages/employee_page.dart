@@ -786,25 +786,19 @@ class _EmployeePageState extends State<EmployeePage> {
     int crossAxisCount;
     double childAspectRatio;
     
-    // Fattore di scala per il testo basato sulla larghezza dello schermo
-    double textScaleFactor;
     if (screenWidth > 1200) {
       crossAxisCount = 4;
       childAspectRatio = 1.5; // Ridotto per più altezza
-      textScaleFactor = 1.1;
     } else if (screenWidth > 900) {
       crossAxisCount = 3;
       childAspectRatio = 1.3; // Ridotto per più altezza
-      textScaleFactor = 1.05;
     } else if (screenWidth > 600) {
       crossAxisCount = 2;
       childAspectRatio = 1.0; // Ridotto per più altezza
-      textScaleFactor = 1.0;
     } else {
       // Mobile - aspect ratio RIDOTTO per card PIÙ ALTE
       crossAxisCount = 1;
       childAspectRatio = 1.4; // Ridotto per più altezza
-      textScaleFactor = 1.0;
     }
     
     return Scaffold(

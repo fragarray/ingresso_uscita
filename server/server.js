@@ -339,7 +339,7 @@ app.get('/api/attendance', (req, res) => {
         forcedByAdminId
       FROM attendance_records 
       WHERE employeeId = ? 
-      ORDER BY id DESC`
+      ORDER BY timestamp DESC, id DESC`
     : `SELECT 
         id,
         employeeId,
@@ -352,7 +352,7 @@ app.get('/api/attendance', (req, res) => {
         isForced,
         forcedByAdminId
       FROM attendance_records 
-      ORDER BY id DESC`;
+      ORDER BY timestamp DESC, id DESC`;
   const params = employeeId ? [employeeId] : [];
   
   db.all(query, params, (err, rows) => {
@@ -662,23 +662,31 @@ const generateAttendanceReport = async (filters = {}) => {
       stats.uniqueEmployees.forEach(empId => {
         const empRecords = records.filter(r => r.employeeId === empId);
         const empName = empRecords[0].employeeName;
-        const { workSessions } = calculateWorkedHours(empRecords);
+        const { workSessions, dailySessions } = calculateWorkedHours(empRecords);
         
         let totalHours = 0;
         Object.values(workSessions).forEach(hours => totalHours += hours);
         
+        // Conta SOLO i giorni con sessioni valide (senza errori)
+        let daysWorked = 0;
+        Object.keys(dailySessions).forEach(dateKey => {
+          const hasValidSessions = dailySessions[dateKey].some(session => !session.hasError);
+          if (hasValidSessions) {
+            daysWorked++;
+          }
+        });
+        
         const workSitesList = [...new Set(empRecords.map(r => r.workSiteName).filter(n => n))];
-        const datesList = [...new Set(empRecords.map(r => new Date(r.timestamp).toISOString().split('T')[0]))];
         
         employeeStats[empId] = {
           name: empName,
           totalRecords: empRecords.length,
           totalHours: totalHours,
           workSites: workSitesList,
-          daysWorked: datesList.length,
+          daysWorked: daysWorked,
           firstRecord: new Date(Math.min(...empRecords.map(r => new Date(r.timestamp)))),
           lastRecord: new Date(Math.max(...empRecords.map(r => new Date(r.timestamp)))),
-          avgHoursPerDay: datesList.length > 0 ? totalHours / datesList.length : 0
+          avgHoursPerDay: daysWorked > 0 ? totalHours / daysWorked : 0
         };
       });
 
@@ -687,20 +695,28 @@ const generateAttendanceReport = async (filters = {}) => {
       stats.uniqueWorkSites.forEach(wsId => {
         const wsRecords = records.filter(r => r.workSiteId === wsId);
         const wsName = wsRecords[0]?.workSiteName || 'Non specificato';
-        const { workSessions } = calculateWorkedHours(wsRecords);
+        const { workSessions, dailySessions } = calculateWorkedHours(wsRecords);
         
         let totalHours = 0;
         Object.values(workSessions).forEach(hours => totalHours += hours);
         
+        // Conta SOLO i giorni con sessioni valide (senza errori)
+        let daysActive = 0;
+        Object.keys(dailySessions).forEach(dateKey => {
+          const hasValidSessions = dailySessions[dateKey].some(session => !session.hasError);
+          if (hasValidSessions) {
+            daysActive++;
+          }
+        });
+        
         const empList = [...new Set(wsRecords.map(r => r.employeeId))];
-        const datesList = [...new Set(wsRecords.map(r => new Date(r.timestamp).toISOString().split('T')[0]))];
         
         workSiteStats[wsId] = {
           name: wsName,
           totalRecords: wsRecords.length,
           totalHours: totalHours,
           uniqueEmployees: empList.length,
-          daysActive: datesList.length
+          daysActive: daysActive
         };
       });
 
@@ -1172,26 +1188,105 @@ const calculateWorkedHours = (records) => {
     } else if (record.type === 'out' && lastIn) {
       const timeIn = new Date(lastIn.timestamp);
       const timeOut = new Date(record.timestamp);
-      const hoursWorked = (timeOut - timeIn) / (1000 * 60 * 60); // in ore
       
-      const workSiteName = record.workSiteName || 'Non specificato';
+      // VALIDAZIONE CRITICA: timeOut deve essere DOPO timeIn
+      if (timeOut <= timeIn) {
+        // Sessione con errore - la includiamo nel report ma NON nel calcolo ore
+        console.warn(`Sessione con errore temporale ignorata dal calcolo: OUT (${timeOut.toLocaleString('it-IT')}) <= IN (${timeIn.toLocaleString('it-IT')})`);
+        
+        const workSiteInName = lastIn.workSiteName || 'Non specificato';
+        const workSiteOutName = record.workSiteName || 'Non specificato';
+        const isMixedWorkSite = workSiteInName !== workSiteOutName;
+        let workSiteKey = isMixedWorkSite ? `[MISTE] ${workSiteInName} → ${workSiteOutName}` : workSiteInName;
+        const dateKey = timeIn.toISOString().split('T')[0];
+        
+        // Aggiungi alla lista giornaliera con flag di errore
+        if (!dailySessions[dateKey]) {
+          dailySessions[dateKey] = [];
+        }
+        dailySessions[dateKey].push({
+          workSite: workSiteKey + ' [ERRORE: OUT prima di IN]',
+          workSiteIn: workSiteInName,
+          workSiteOut: workSiteOutName,
+          isMixed: isMixedWorkSite,
+          timeIn: timeIn,
+          timeOut: timeOut,
+          hours: 0,
+          hasError: true,
+          errorType: 'TEMPORAL'
+        });
+        
+        lastIn = null;
+        return;
+      }
+      
+      const millisecondsWorked = timeOut - timeIn;
+      const hoursWorked = millisecondsWorked / (1000 * 60 * 60);
+      
+      // VALIDAZIONE: sessioni superiori a 24h sono probabilmente errori nei dati
+      if (hoursWorked > 24) {
+        console.warn(`Sessione superiore a 24h ignorata dal calcolo: ${hoursWorked.toFixed(2)}h (${timeIn.toLocaleString('it-IT')} - ${timeOut.toLocaleString('it-IT')})`);
+        
+        const workSiteInName = lastIn.workSiteName || 'Non specificato';
+        const workSiteOutName = record.workSiteName || 'Non specificato';
+        const isMixedWorkSite = workSiteInName !== workSiteOutName;
+        let workSiteKey = isMixedWorkSite ? `[MISTE] ${workSiteInName} → ${workSiteOutName}` : workSiteInName;
+        const dateKey = timeIn.toISOString().split('T')[0];
+        
+        // Aggiungi alla lista giornaliera con flag di errore
+        if (!dailySessions[dateKey]) {
+          dailySessions[dateKey] = [];
+        }
+        dailySessions[dateKey].push({
+          workSite: workSiteKey + ' [ERRORE: Sessione > 24h]',
+          workSiteIn: workSiteInName,
+          workSiteOut: workSiteOutName,
+          isMixed: isMixedWorkSite,
+          timeIn: timeIn,
+          timeOut: timeOut,
+          hours: hoursWorked,
+          hasError: true,
+          errorType: 'EXCESSIVE_HOURS'
+        });
+        
+        lastIn = null;
+        return;
+      }
+      
+      // Gestione cantieri: IN e OUT possono essere su cantieri diversi
+      const workSiteInName = lastIn.workSiteName || 'Non specificato';
+      const workSiteOutName = record.workSiteName || 'Non specificato';
+      const isMixedWorkSite = workSiteInName !== workSiteOutName;
+      
+      // Determina la chiave per il cantiere
+      let workSiteKey;
+      if (isMixedWorkSite) {
+        workSiteKey = `[MISTE] ${workSiteInName} → ${workSiteOutName}`;
+      } else {
+        workSiteKey = workSiteInName;
+      }
+      
       const dateKey = timeIn.toISOString().split('T')[0]; // YYYY-MM-DD
       
       // Accumula per cantiere
-      if (!workSessions[workSiteName]) {
-        workSessions[workSiteName] = 0;
+      if (!workSessions[workSiteKey]) {
+        workSessions[workSiteKey] = 0;
       }
-      workSessions[workSiteName] += hoursWorked;
+      workSessions[workSiteKey] += hoursWorked;
       
       // Accumula per giorno
       if (!dailySessions[dateKey]) {
         dailySessions[dateKey] = [];
       }
       dailySessions[dateKey].push({
-        workSite: workSiteName,
+        workSite: workSiteKey,
+        workSiteIn: workSiteInName,
+        workSiteOut: workSiteOutName,
+        isMixed: isMixedWorkSite,
         timeIn: timeIn,
         timeOut: timeOut,
-        hours: hoursWorked
+        hours: hoursWorked,
+        hasError: false
       });
       
       lastIn = null;
@@ -1362,7 +1457,15 @@ const generateEmployeeHoursReport = async (employeeId, startDate, endDate) => {
       summarySheet.addRow([]);
       
       // STATISTICHE
-      const workDays = Object.keys(dailySessions).length;
+      // Conta SOLO i giorni con sessioni valide (senza errori)
+      let workDays = 0;
+      Object.keys(dailySessions).forEach(dateKey => {
+        const hasValidSessions = dailySessions[dateKey].some(session => !session.hasError);
+        if (hasValidSessions) {
+          workDays++;
+        }
+      });
+      
       const avgHoursPerDay = workDays > 0 ? totalHours / workDays : 0;
       const avgFormatted = formatHoursMinutes(avgHoursPerDay);
       
@@ -1392,19 +1495,57 @@ const generateEmployeeHoursReport = async (employeeId, startDate, endDate) => {
         row.getCell(1).font = { bold: true };
       });
       
+      summarySheet.addRow([]);
+      summarySheet.addRow([]);
+      
+      // LEGENDA
+      summarySheet.addRow(['LEGENDA']).font = { bold: true, size: 12 };
+      summarySheet.addRow([]);
+      
+      const legendData = [
+        ['[MISTE] Cantiere A → Cantiere B', 'Sessione con ingresso e uscita in cantieri diversi'],
+        ['[ERRORE: OUT prima di IN]', 'Sessione con timestamp invalido - ESCLUSA dal totale'],
+        ['[ERRORE: Sessione > 24h]', 'Sessione superiore a 24 ore - ESCLUSA dal totale']
+      ];
+      
+      legendData.forEach(([label, description]) => {
+        const row = summarySheet.addRow([label, description]);
+        row.getCell(1).font = { bold: true, color: { argb: 'FF0070C0' } };
+        row.getCell(2).font = { italic: true };
+      });
+      
       // ==================== FOGLIO 2: DETTAGLIO GIORNALIERO ====================
       const detailSheet = workbook.addWorksheet('Dettaglio Giornaliero');
       
+      // Aggiungi nota importante in alto
+      detailSheet.mergeCells('A1:F1');
+      const noteCell = detailSheet.getCell('A1');
+      noteCell.value = '⚠️ IMPORTANTE: Le righe con sfondo ROSSO contengono errori e sono ESCLUSE dal totale ore. Verificare e correggere.';
+      noteCell.style = {
+        font: { bold: true, size: 11, color: { argb: 'FF9C0006' } },
+        fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } },
+        alignment: { vertical: 'middle', horizontal: 'center' },
+        border: {
+          top: { style: 'medium', color: { argb: 'FF9C0006' } },
+          left: { style: 'medium', color: { argb: 'FF9C0006' } },
+          bottom: { style: 'medium', color: { argb: 'FF9C0006' } },
+          right: { style: 'medium', color: { argb: 'FF9C0006' } }
+        }
+      };
+      detailSheet.getRow(1).height = 30;
+      
+      detailSheet.addRow([]); // Riga vuota
+      
       detailSheet.columns = [
         { header: 'Data', key: 'date', width: 15 },
-        { header: 'Cantiere', key: 'workSite', width: 30 },
+        { header: 'Cantiere', key: 'workSite', width: 35 },
         { header: 'Ora Ingresso', key: 'timeIn', width: 18 },
         { header: 'Ora Uscita', key: 'timeOut', width: 18 },
         { header: 'Ore Lavorate', key: 'hours', width: 15 },
         { header: 'Totale Giorno', key: 'dailyTotal', width: 15 }
       ];
       
-      detailSheet.getRow(1).eachCell(cell => cell.style = headerStyle);
+      detailSheet.getRow(3).eachCell(cell => cell.style = headerStyle);
       
       // Ordina le date
       const sortedDates = Object.keys(dailySessions).sort();
@@ -1413,21 +1554,41 @@ const generateEmployeeHoursReport = async (employeeId, startDate, endDate) => {
         const sessions = dailySessions[dateKey];
         const date = new Date(dateKey).toLocaleDateString('it-IT');
         
+        // Calcola totale giorno SOLO per sessioni valide (senza errori)
         let dailyTotal = 0;
+        let hasErrors = false;
         sessions.forEach(session => {
-          dailyTotal += session.hours;
+          if (!session.hasError) {
+            dailyTotal += session.hours;
+          } else {
+            hasErrors = true;
+          }
         });
         
         const dailyFormatted = formatHoursMinutes(dailyTotal);
         
         sessions.forEach((session, index) => {
           const sessionFormatted = formatHoursMinutes(session.hours);
+          
+          // Formattazione date con gestione cambio giorno
+          let timeInStr, timeOutStr;
+          const inDate = session.timeIn.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
+          const outDate = session.timeOut.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
+          
+          timeInStr = session.timeIn.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+          timeOutStr = session.timeOut.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+          
+          // Se OUT è in un giorno diverso da IN, aggiungi la data
+          if (inDate !== outDate) {
+            timeOutStr = `${timeOutStr} (${outDate})`;
+          }
+          
           const row = detailSheet.addRow({
             date: index === 0 ? date : '',
             workSite: session.workSite,
-            timeIn: session.timeIn.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
-            timeOut: session.timeOut.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
-            hours: sessionFormatted.formatted,
+            timeIn: timeInStr,
+            timeOut: timeOutStr,
+            hours: session.hasError ? '⚠️ ESCLUSA' : sessionFormatted.formatted,
             dailyTotal: index === 0 ? dailyFormatted.formatted : ''
           });
           
@@ -1439,16 +1600,37 @@ const generateEmployeeHoursReport = async (employeeId, startDate, endDate) => {
               right: { style: 'thin' }
             };
             
+            // Riga con errore: sfondo rosso chiaro
+            if (session.hasError) {
+              cell.fill = { 
+                type: 'pattern', 
+                pattern: 'solid', 
+                fgColor: { argb: 'FFFFC7CE' } // Rosso chiaro
+              };
+              if (colNumber === 5) {
+                cell.font = { bold: true, color: { argb: 'FF9C0006' } }; // Rosso scuro
+              }
+            }
+            
+            // Prima riga del giorno: data in grassetto
             if (colNumber === 1 && index === 0) {
               cell.font = { bold: true };
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+              if (!hasErrors) {
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+              }
             }
             
+            // Totale giorno: sfondo verde se tutto ok
             if (colNumber === 6 && index === 0) {
               cell.font = { bold: true };
-              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+              if (!hasErrors && dailyTotal > 0) {
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } }; // Verde chiaro
+              } else if (hasErrors) {
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } }; // Rosso chiaro
+              }
             }
             
+            // Allineamento
             if (colNumber >= 3) {
               cell.alignment = { horizontal: 'center' };
             }
@@ -1459,7 +1641,123 @@ const generateEmployeeHoursReport = async (employeeId, startDate, endDate) => {
         detailSheet.addRow([]);
       });
       
-      // ==================== FOGLIO 3: TIMBRATURE ORIGINALI ====================
+      // ==================== FOGLIO 3: VALIDAZIONE ERRORI ====================
+      const validationSheet = workbook.addWorksheet('⚠️ Validazione');
+      
+      // Raccogli tutte le sessioni con errore
+      const errorSessions = [];
+      Object.keys(dailySessions).forEach(dateKey => {
+        dailySessions[dateKey].forEach(session => {
+          if (session.hasError) {
+            errorSessions.push({ date: dateKey, ...session });
+          }
+        });
+      });
+      
+      // Titolo
+      validationSheet.mergeCells('A1:F1');
+      const validationTitle = validationSheet.getCell('A1');
+      if (errorSessions.length > 0) {
+        validationTitle.value = `⚠️ ATTENZIONE: ${errorSessions.length} SESSIONI CON ERRORI TROVATE - VERIFICARE E CORREGGERE`;
+        validationTitle.style = {
+          font: { bold: true, size: 14, color: { argb: 'FFFFFFFF' } },
+          fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE74C3C' } }, // Rosso
+          alignment: { vertical: 'middle', horizontal: 'center' },
+          border: {
+            top: { style: 'medium' },
+            left: { style: 'medium' },
+            bottom: { style: 'medium' },
+            right: { style: 'medium' }
+          }
+        };
+      } else {
+        validationTitle.value = '✅ NESSUN ERRORE RILEVATO - TUTTE LE SESSIONI SONO VALIDE';
+        validationTitle.style = {
+          font: { bold: true, size: 14, color: { argb: 'FFFFFFFF' } },
+          fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00B050' } }, // Verde
+          alignment: { vertical: 'middle', horizontal: 'center' },
+          border: {
+            top: { style: 'medium' },
+            left: { style: 'medium' },
+            bottom: { style: 'medium' },
+            right: { style: 'medium' }
+          }
+        };
+      }
+      validationSheet.getRow(1).height = 30;
+      
+      validationSheet.addRow([]);
+      
+      if (errorSessions.length > 0) {
+        validationSheet.columns = [
+          { header: 'Data', key: 'date', width: 15 },
+          { header: 'Tipo Errore', key: 'errorType', width: 25 },
+          { header: 'Cantiere IN', key: 'workSiteIn', width: 25 },
+          { header: 'Cantiere OUT', key: 'workSiteOut', width: 25 },
+          { header: 'Ora Ingresso', key: 'timeIn', width: 20 },
+          { header: 'Ora Uscita', key: 'timeOut', width: 20 }
+        ];
+        
+        const validationHeaderRow = validationSheet.getRow(3);
+        validationHeaderRow.eachCell(cell => {
+          cell.style = {
+            font: { bold: true, color: { argb: 'FFFFFFFF' } },
+            fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE74C3C' } },
+            alignment: { vertical: 'middle', horizontal: 'center' },
+            border: {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            }
+          };
+        });
+        
+        errorSessions.forEach(session => {
+          const errorTypeText = session.errorType === 'TEMPORAL' 
+            ? '🕒 OUT prima o uguale a IN' 
+            : '⏰ Sessione > 24 ore';
+          
+          const row = validationSheet.addRow({
+            date: new Date(session.date).toLocaleDateString('it-IT'),
+            errorType: errorTypeText,
+            workSiteIn: session.workSiteIn,
+            workSiteOut: session.workSiteOut,
+            timeIn: session.timeIn.toLocaleString('it-IT'),
+            timeOut: session.timeOut.toLocaleString('it-IT')
+          });
+          
+          row.eachCell(cell => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } };
+            cell.border = {
+              top: { style: 'thin' },
+              left: { style: 'thin' },
+              bottom: { style: 'thin' },
+              right: { style: 'thin' }
+            };
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+          });
+          
+          row.getCell(2).font = { bold: true, color: { argb: 'FF9C0006' } };
+        });
+        
+        validationSheet.addRow([]);
+        validationSheet.addRow([]);
+        
+        // Istruzioni
+        const instructionsRow = validationSheet.addRow(['ISTRUZIONI:']);
+        instructionsRow.getCell(1).font = { bold: true, size: 12 };
+        
+        validationSheet.addRow(['1. Le sessioni sopra elencate sono ESCLUSE dal totale ore']);
+        validationSheet.addRow(['2. Verificare le timbrature originali nel foglio "Timbrature Originali"']);
+        validationSheet.addRow(['3. Correggere le timbrature errate nel database']);
+        validationSheet.addRow(['4. Rigenerare il report dopo le correzioni']);
+      } else {
+        validationSheet.addRow(['Tutte le sessioni sono state validate correttamente.']);
+        validationSheet.addRow(['Non sono stati rilevati errori temporali o sessioni eccessive.']);
+      }
+      
+      // ==================== FOGLIO 4: TIMBRATURE ORIGINALI ====================
       const rawSheet = workbook.addWorksheet('Timbrature Originali');
       
       rawSheet.columns = [
@@ -1611,13 +1909,21 @@ const generateWorkSiteReport = async (workSiteId, employeeId, startDate, endDate
         
         // Calcola statistiche cantiere
         const uniqueEmployees = [...new Set(records.map(r => r.employeeId))];
-        const uniqueDates = [...new Set(records.map(r => new Date(r.timestamp).toISOString().split('T')[0]))];
+        
+        // Conta SOLO i giorni con sessioni valide (senza errori)
+        let uniqueDays = 0;
+        Object.keys(dailySessions).forEach(dateKey => {
+          const hasValidSessions = dailySessions[dateKey].some(session => !session.hasError);
+          if (hasValidSessions) {
+            uniqueDays++;
+          }
+        });
         
         // Calcola ore totali
         let totalHours = 0;
         Object.values(workSessions).forEach(hours => totalHours += hours);
         
-        const avgHoursPerDay = uniqueDates.length > 0 ? totalHours / uniqueDates.length : 0;
+        const avgHoursPerDay = uniqueDays > 0 ? totalHours / uniqueDays : 0;
         const avgHoursPerEmployee = uniqueEmployees.length > 0 ? totalHours / uniqueEmployees.length : 0;
         
         const workSiteName = workSiteId && workSite 
@@ -1729,7 +2035,7 @@ const generateWorkSiteReport = async (workSiteId, employeeId, startDate, endDate
         
         const statsData = [
           ['Dipendenti Totali', uniqueEmployees.length, 'Ore Totali Lavorate', totalFormatted.formatted],
-          ['Giorni di Apertura', uniqueDates.length, 'Media Ore per Giorno', avgDayFormatted.formatted],
+          ['Giorni di Apertura', uniqueDays, 'Media Ore per Giorno', avgDayFormatted.formatted],
           ['Timbrature Totali', records.length, 'Media Ore per Dipendente', avgEmpFormatted.formatted]
         ];
         
@@ -1819,7 +2125,7 @@ const generateWorkSiteReport = async (workSiteId, employeeId, startDate, endDate
         const totalRow = summarySheet.addRow([
           'TOTALE GENERALE',
           totalFormatted.formatted,
-          uniqueDates.length + ' giorni',
+          uniqueDays + ' giorni',
           avgDayFormatted.formatted
         ]);
         totalRow.eachCell(cell => cell.style = totalStyle);

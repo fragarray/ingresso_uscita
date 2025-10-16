@@ -9,6 +9,7 @@ import '../widgets/work_sites_tab.dart';
 import 'package:intl/intl.dart';
 import '../models/attendance_record.dart';
 import '../models/employee.dart';
+import '../models/work_site.dart';
 import '../services/api_service.dart';
 
 class AdminPage extends StatefulWidget {
@@ -72,6 +73,7 @@ class _TodayAttendanceTabState extends State<TodayAttendanceTab>
     with AutomaticKeepAliveClientMixin {
   bool _isLoading = false;
   List<Employee> _employees = [];
+  List<WorkSite> _workSites = [];
   List<AttendanceRecord> _todayAttendance = [];
   AppState? _appState; // Riferimento salvato
   int _lastRefreshCounter = -1; // Traccia l'ultimo refresh processato
@@ -117,6 +119,7 @@ class _TodayAttendanceTabState extends State<TodayAttendanceTab>
     setState(() => _isLoading = true);
     try {
       final employees = await ApiService.getEmployees();
+      final workSites = await ApiService.getWorkSites();
       final attendance = await ApiService.getAttendanceRecords();
       
       final now = DateTime.now();
@@ -141,6 +144,7 @@ class _TodayAttendanceTabState extends State<TodayAttendanceTab>
       
       setState(() {
         _employees = employees;
+        _workSites = workSites;
         _todayAttendance = todayRecords;
       });
     } catch (e) {
@@ -234,6 +238,18 @@ class _TodayAttendanceTabState extends State<TodayAttendanceTab>
                         orElse: () => Employee(name: 'Sconosciuto', email: ''),
                       );
                       
+                      // Trova il cantiere associato
+                      final workSite = _workSites.firstWhere(
+                        (ws) => ws.id == record.workSiteId,
+                        orElse: () => WorkSite(
+                          id: 0,
+                          name: 'Cantiere sconosciuto',
+                          address: '',
+                          latitude: 0,
+                          longitude: 0,
+                        ),
+                      );
+                      
                       return Card(
                         margin: const EdgeInsets.symmetric(
                           horizontal: 16,
@@ -253,20 +269,28 @@ class _TodayAttendanceTabState extends State<TodayAttendanceTab>
                             employee.name,
                             style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
-                          subtitle: Text(
-                            '${DateFormat('HH:mm:ss').format(record.timestamp.toLocal())} - ${record.type == 'in' ? 'Ingresso' : 'Uscita'}',
-                          ),
-                          trailing: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.end,
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '${record.latitude.toStringAsFixed(6)}',
-                                style: const TextStyle(fontSize: 11),
+                                '${DateFormat('HH:mm:ss').format(record.timestamp.toLocal())} - ${record.type == 'in' ? 'Ingresso' : 'Uscita'}',
                               ),
-                              Text(
-                                '${record.longitude.toStringAsFixed(6)}',
-                                style: const TextStyle(fontSize: 11),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Icon(Icons.location_on, size: 12, color: Colors.grey[600]),
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      workSite.name,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -1236,6 +1260,7 @@ class _CurrentlyLoggedInTabState extends State<CurrentlyLoggedInTab>
     with AutomaticKeepAliveClientMixin {
   bool _isLoading = false;
   List<Employee> _employees = [];
+  List<WorkSite> _workSites = [];
   Map<int, AttendanceRecord> _lastRecords = {}; // employeeId -> last record
   List<Employee> _loggedInEmployees = [];
   AppState? _appState; // Riferimento salvato
@@ -1283,6 +1308,7 @@ class _CurrentlyLoggedInTabState extends State<CurrentlyLoggedInTab>
     
     try {
       final employees = await ApiService.getEmployees();
+      final workSites = await ApiService.getWorkSites();
       final attendance = await ApiService.getAttendanceRecords();
       
       debugPrint('=== DEBUG CHI È TIMBRATO ===');
@@ -1316,6 +1342,7 @@ class _CurrentlyLoggedInTabState extends State<CurrentlyLoggedInTab>
       
       setState(() {
         _employees = employees;
+        _workSites = workSites;
         _lastRecords = lastRecordsMap;
         _loggedInEmployees = loggedIn;
       });
@@ -1409,6 +1436,18 @@ class _CurrentlyLoggedInTabState extends State<CurrentlyLoggedInTab>
                       final lastRecord = _lastRecords[employee.id]!;
                       final isForced = lastRecord.isForced;
                       
+                      // Trova il cantiere associato
+                      final workSite = _workSites.firstWhere(
+                        (ws) => ws.id == lastRecord.workSiteId,
+                        orElse: () => WorkSite(
+                          id: 0,
+                          name: 'Cantiere sconosciuto',
+                          address: '',
+                          latitude: 0,
+                          longitude: 0,
+                        ),
+                      );
+                      
                       // Calcola da quanto tempo è timbrato
                       final duration = DateTime.now().difference(lastRecord.timestamp);
                       String durationText;
@@ -1491,6 +1530,22 @@ class _CurrentlyLoggedInTabState extends State<CurrentlyLoggedInTab>
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              Row(
+                                children: [
+                                  Icon(Icons.location_on, size: 14, color: Colors.grey[600]),
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      workSite.name,
+                                      style: TextStyle(
+                                        color: Colors.grey[700],
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
                               Text(
                                 'Timbrato ${DateFormat('HH:mm:ss').format(lastRecord.timestamp.toLocal())}',
                               ),
