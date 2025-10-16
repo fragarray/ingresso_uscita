@@ -210,6 +210,100 @@ app.post('/api/admin/force-auto-checkout', async (req, res) => {
 
 // ==================== END AUTO-CHECKOUT ====================
 
+// ==================== APP SETTINGS ROUTES ====================
+
+// GET: Ottieni impostazione specifica
+app.get('/api/settings/:key', (req, res) => {
+  const { key } = req.params;
+  
+  db.get('SELECT value, updatedAt FROM app_settings WHERE key = ?', [key], (err, row) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    
+    if (!row) {
+      res.status(404).json({ error: 'Setting not found' });
+      return;
+    }
+    
+    res.json({
+      key: key,
+      value: row.value,
+      updatedAt: row.updatedAt
+    });
+  });
+});
+
+// GET: Ottieni tutte le impostazioni
+app.get('/api/settings', (req, res) => {
+  db.all('SELECT key, value, updatedAt FROM app_settings', [], (err, rows) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    
+    const settings = {};
+    rows.forEach(row => {
+      settings[row.key] = {
+        value: row.value,
+        updatedAt: row.updatedAt
+      };
+    });
+    
+    res.json(settings);
+  });
+});
+
+// PUT: Aggiorna impostazione (solo admin)
+app.put('/api/settings/:key', (req, res) => {
+  const { key } = req.params;
+  const { value, adminId } = req.body;
+  
+  if (!adminId) {
+    res.status(400).json({ error: 'adminId required' });
+    return;
+  }
+  
+  // Verifica che sia admin
+  db.get('SELECT * FROM employees WHERE id = ? AND isAdmin = 1', [adminId], (err, admin) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    
+    if (!admin) {
+      res.status(403).json({ error: 'Unauthorized: Admin access required' });
+      return;
+    }
+    
+    // Aggiorna o inserisci impostazione
+    db.run(`INSERT INTO app_settings (key, value, updatedAt) 
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET 
+              value = excluded.value,
+              updatedAt = CURRENT_TIMESTAMP`,
+      [key, value],
+      (err) => {
+        if (err) {
+          res.status(500).json({ error: err.message });
+          return;
+        }
+        
+        console.log(`✓ Setting '${key}' updated to '${value}' by admin ${admin.name}`);
+        res.json({ 
+          success: true, 
+          key: key, 
+          value: value,
+          updatedBy: admin.name
+        });
+      }
+    );
+  });
+});
+
+// ==================== END APP SETTINGS ====================
+
 // Routes
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;

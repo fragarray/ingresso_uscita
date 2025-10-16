@@ -40,7 +40,7 @@ dependencies:
   excel: ^2.1.0
   device_info_plus: ^9.0.3
   shared_preferences: ^2.2.1
-  intl: ^0.18.1
+  intl: ^0.20.2
   flutter_map: ^8.2.2
   latlong2: ^0.9.1
   geocoding: ^4.0.0

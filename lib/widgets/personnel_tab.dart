@@ -269,7 +269,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
                   const SizedBox(height: 8),
                   Text('• Tipo: ENTRATA'),
                   Text(
-                    '• Data/Ora: ${DateFormat('dd/MM/yyyy HH:mm').format(lastRecord.timestamp)}',
+                    '• Data/Ora: ${DateFormat('dd/MM/yyyy HH:mm:ss').format(lastRecord.timestamp)}',
                   ),
                   Text(
                     '• Cantiere: ${lastRecord.workSiteId != null ? "ID ${lastRecord.workSiteId}" : "N/A"}',
@@ -2178,7 +2178,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
                                         children: [
                                           Expanded(
                                             child: Text(
-                                              '${record.timestamp.toLocal().toString().split('.')[0]} - ${record.type == 'in' ? 'Ingresso' : 'Uscita'}',
+                                              '${DateFormat('dd/MM/yyyy HH:mm:ss').format(record.timestamp.toLocal())} - ${record.type == 'in' ? 'Ingresso' : 'Uscita'}',
                                             ),
                                           ),
                                           if (isForced) ...[

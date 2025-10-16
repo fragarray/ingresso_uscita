@@ -15,6 +15,7 @@ router.get('/', (req, res) => {
     address,
     isActive,
     CAST(radiusMeters AS REAL) as radiusMeters,
+    description,
     createdAt
     FROM work_sites 
     ORDER BY createdAt DESC`, [], (err, rows) => {
@@ -29,7 +30,7 @@ router.get('/', (req, res) => {
 
 // Add new work site
 router.post('/', (req, res) => {
-  const { name, latitude, longitude, address, isActive, radiusMeters } = req.body;
+  const { name, latitude, longitude, address, isActive, radiusMeters, description } = req.body;
 
   if (!name || !latitude || !longitude || !address) {
     res.status(400).json({ error: 'Missing required fields' });
@@ -41,8 +42,8 @@ router.post('/', (req, res) => {
   const radius = radiusMeters || 100.0;
 
   db.run(
-    'INSERT INTO work_sites (name, latitude, longitude, address, isActive, radiusMeters) VALUES (?, ?, ?, ?, ?, ?)',
-    [name, latitude, longitude, address, activeValue, radius],
+    'INSERT INTO work_sites (name, latitude, longitude, address, isActive, radiusMeters, description) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [name, latitude, longitude, address, activeValue, radius, description || null],
     function(err) {
       if (err) {
         console.error(err);
@@ -63,10 +64,10 @@ router.post('/', (req, res) => {
 
 // Update work site
 router.put('/:id', (req, res) => {
-  const { name, latitude, longitude, address, isActive, radiusMeters } = req.body;
+  const { name, latitude, longitude, address, isActive, radiusMeters, description } = req.body;
   const id = req.params.id;
 
-  console.log('UPDATE work site request:', { id, name, latitude, longitude, address, isActive, radiusMeters });
+  console.log('UPDATE work site request:', { id, name, latitude, longitude, address, isActive, radiusMeters, description });
 
   if (!name || !latitude || !longitude || !address || (isActive === undefined && isActive === null)) {
     res.status(400).json({ error: 'Missing required fields' });
@@ -76,11 +77,11 @@ router.put('/:id', (req, res) => {
   const activeValue = typeof isActive === 'boolean' ? (isActive ? 1 : 0) : (isActive ? 1 : 0);
   const radius = radiusMeters !== undefined ? radiusMeters : 100.0;
 
-  console.log('Updating with values:', { activeValue, radius });
+  console.log('Updating with values:', { activeValue, radius, description });
 
   db.run(
-    'UPDATE work_sites SET name = ?, latitude = ?, longitude = ?, address = ?, isActive = ?, radiusMeters = ? WHERE id = ?',
-    [name, latitude, longitude, address, activeValue, radius, id],
+    'UPDATE work_sites SET name = ?, latitude = ?, longitude = ?, address = ?, isActive = ?, radiusMeters = ?, description = ? WHERE id = ?',
+    [name, latitude, longitude, address, activeValue, radius, description || null, id],
     function(err) {
       if (err) {
         console.error('Update error:', err);

@@ -97,6 +97,29 @@ db.serialize(() => {
     }
   });
   
+  // Aggiungi colonna description per descrizione cantiere
+  db.run(`ALTER TABLE work_sites ADD COLUMN description TEXT`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding description column:', err);
+    } else if (!err) {
+      console.log('✓ Column description added to work_sites');
+    }
+  });
+  
+  // Tabella app_settings per impostazioni globali
+  db.run(`CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  
+  // Inserisci valore default per accuratezza GPS se non esiste
+  db.run(`INSERT OR IGNORE INTO app_settings (key, value) VALUES ('minGpsAccuracyPercent', '75.0')`, (err) => {
+    if (!err) {
+      console.log('✓ Default GPS accuracy setting initialized');
+    }
+  });
+  
   // Verifica struttura tabella work_sites
   db.all(`PRAGMA table_info(work_sites)`, [], (err, columns) => {
     if (!err) {

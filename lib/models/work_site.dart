@@ -7,6 +7,7 @@ class WorkSite {
   final bool isActive;
   final DateTime? createdAt;
   final double radiusMeters;  // Raggio di validità in metri
+  final String? description;  // Descrizione del cantiere
 
   WorkSite({
     this.id,
@@ -17,6 +18,7 @@ class WorkSite {
     this.isActive = true,
     DateTime? createdAt,
     this.radiusMeters = 100.0,  // Default 100 metri
+    this.description,
   }) : this.createdAt = createdAt ?? DateTime.now();
 
   Map<String, dynamic> toMap() {
@@ -28,6 +30,7 @@ class WorkSite {
       'address': address,
       'isActive': isActive ? 1 : 0,
       'radiusMeters': radiusMeters,
+      if (description != null) 'description': description,
       if (createdAt != null) 'createdAt': createdAt!.toIso8601String(),
     };
   }
@@ -43,6 +46,7 @@ class WorkSite {
       radiusMeters: map['radiusMeters'] != null 
           ? (map['radiusMeters'] as num).toDouble() 
           : 100.0,
+      description: map['description'],
       createdAt: map['createdAt'] != null ? DateTime.parse(map['createdAt']) : null,
     );
   }

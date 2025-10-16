@@ -28,6 +28,7 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _radiusController = TextEditingController(text: '100');
+  final _descriptionController = TextEditingController();
   final _addressSearchController = TextEditingController();
   bool _isSearchingAddress = false;
   MapType _currentMapType = MapType.street; // Tipo di mappa corrente
@@ -36,6 +37,7 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
   void dispose() {
     _nameController.dispose();
     _radiusController.dispose();
+    _descriptionController.dispose();
     _addressSearchController.dispose();
     super.dispose();
   }
@@ -379,6 +381,125 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
     return result;
   }
 
+  Future<String?> _editWorkSiteNameDialog(String currentName) async {
+    final nameController = TextEditingController(text: currentName);
+    final formKey = GlobalKey<FormState>();
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.edit, color: Colors.blue),
+            SizedBox(width: 8),
+            Text('Modifica Nome'),
+          ],
+        ),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Nome Cantiere',
+                  prefixIcon: Icon(Icons.location_city),
+                  border: OutlineInputBorder(),
+                ),
+                autofocus: true,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Inserire un nome';
+                  }
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ANNULLA'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (formKey.currentState!.validate()) {
+                Navigator.pop(context, nameController.text);
+              }
+            },
+            child: const Text('SALVA'),
+          ),
+        ],
+      ),
+    );
+
+    await Future.delayed(const Duration(milliseconds: 100));
+    nameController.dispose();
+    return result;
+  }
+
+  Future<String?> _editWorkSiteDescriptionDialog(String? currentDescription) async {
+    final descriptionController = TextEditingController(text: currentDescription ?? '');
+    final formKey = GlobalKey<FormState>();
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.description, color: Colors.purple),
+            SizedBox(width: 8),
+            Text('Modifica Descrizione'),
+          ],
+        ),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Descrizione visibile ai dipendenti nelle card dei cantieri.',
+                style: TextStyle(color: Colors.grey[600], fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: descriptionController,
+                decoration: const InputDecoration(
+                  labelText: 'Descrizione',
+                  prefixIcon: Icon(Icons.text_fields),
+                  border: OutlineInputBorder(),
+                  helperText: 'Lascia vuoto per rimuovere',
+                ),
+                maxLines: 4,
+                maxLength: 200,
+                autofocus: true,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ANNULLA'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final text = descriptionController.text.trim();
+              Navigator.pop(context, text.isEmpty ? null : text);
+            },
+            child: const Text('SALVA'),
+          ),
+        ],
+      ),
+    );
+
+    await Future.delayed(const Duration(milliseconds: 100));
+    descriptionController.dispose();
+    return result;
+  }
+
   Future<void> _showWorkSiteDetails(WorkSite workSite) async {
     showDialog(
       context: context,
@@ -413,6 +534,8 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
       
       // Usa il raggio dal cantiere aggiornato
       double currentRadius = freshWorkSite.radiusMeters;
+      String currentName = freshWorkSite.name;
+      String? currentDescription = freshWorkSite.description;
       
       showDialog(
         context: context,
@@ -427,9 +550,41 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    freshWorkSite.name,
+                    currentName,
                     style: const TextStyle(fontSize: 20),
                   ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.edit, size: 20),
+                  onPressed: () async {
+                    final result = await _editWorkSiteNameDialog(currentName);
+                    if (result != null && result != currentName) {
+                      // Aggiorna il nome sul server
+                      final updatedWorkSite = WorkSite(
+                        id: freshWorkSite.id,
+                        name: result,
+                        latitude: freshWorkSite.latitude,
+                        longitude: freshWorkSite.longitude,
+                        address: freshWorkSite.address,
+                        isActive: freshWorkSite.isActive,
+                        radiusMeters: currentRadius,
+                        description: currentDescription,
+                        createdAt: freshWorkSite.createdAt,
+                      );
+                      
+                      final success = await ApiService.updateWorkSite(updatedWorkSite);
+                      if (success && mounted) {
+                        setState(() {
+                          currentName = result;
+                        });
+                        _loadWorkSites();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Nome aggiornato')),
+                        );
+                      }
+                    }
+                  },
+                  tooltip: 'Modifica nome',
                 ),
               ],
             ),
@@ -481,6 +636,82 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 16),
+                  
+                  // Descrizione cantiere
+                  Row(
+                    children: [
+                      const Icon(Icons.description, color: Colors.purple),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Descrizione:',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        icon: const Icon(Icons.edit, size: 20),
+                        onPressed: () async {
+                          final result = await _editWorkSiteDescriptionDialog(currentDescription);
+                          if (result != currentDescription) {
+                            // Aggiorna la descrizione sul server
+                            final updatedWorkSite = WorkSite(
+                              id: freshWorkSite.id,
+                              name: currentName,
+                              latitude: freshWorkSite.latitude,
+                              longitude: freshWorkSite.longitude,
+                              address: freshWorkSite.address,
+                              isActive: freshWorkSite.isActive,
+                              radiusMeters: currentRadius,
+                              description: result,
+                              createdAt: freshWorkSite.createdAt,
+                            );
+                            
+                            final success = await ApiService.updateWorkSite(updatedWorkSite);
+                            if (success && mounted) {
+                              setState(() {
+                                currentDescription = result;
+                              });
+                              _loadWorkSites();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Descrizione aggiornata')),
+                              );
+                            }
+                          }
+                        },
+                        tooltip: 'Modifica descrizione',
+                      ),
+                    ],
+                  ),
+                  if (currentDescription != null && currentDescription!.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.purple[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.purple[200]!, width: 1),
+                      ),
+                      child: Text(
+                        currentDescription!,
+                        style: TextStyle(
+                          color: Colors.grey[800],
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ] else ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Nessuna descrizione',
+                      style: TextStyle(
+                        color: Colors.grey[400],
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                 
                 Row(
@@ -690,49 +921,111 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Nuovo Cantiere'),
-        content: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: _nameController,
-                decoration: const InputDecoration(labelText: 'Nome Cantiere'),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Inserire un nome per il cantiere';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _radiusController,
-                decoration: const InputDecoration(
-                  labelText: 'Raggio validità (metri)',
-                  helperText: 'Distanza massima per timbrature valide',
-                  prefixIcon: Icon(Icons.radar),
+        content: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: _nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Nome Cantiere',
+                    prefixIcon: Icon(Icons.location_city),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Inserire un nome per il cantiere';
+                    }
+                    return null;
+                  },
                 ),
-                keyboardType: TextInputType.number,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Inserire il raggio';
-                  }
-                  final radius = double.tryParse(value);
-                  if (radius == null || radius < 10 || radius > 1000) {
-                    return 'Inserire un valore tra 10 e 1000 metri';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              Text('Indirizzo: $address', style: Theme.of(context).textTheme.bodyMedium),
-              const SizedBox(height: 8),
-              Text(
-                'Coordinate: ${_newWorkSitePosition!.latitude.toStringAsFixed(6)}, ${_newWorkSitePosition!.longitude.toStringAsFixed(6)}',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
+                const SizedBox(height: 16),
+                TextFormField(
+                  controller: _descriptionController,
+                  decoration: const InputDecoration(
+                    labelText: 'Descrizione (opzionale)',
+                    prefixIcon: Icon(Icons.description),
+                    helperText: 'Info aggiuntive visibili ai dipendenti',
+                  ),
+                  maxLines: 3,
+                  maxLength: 200,
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _radiusController,
+                  decoration: const InputDecoration(
+                    labelText: 'Raggio validità (metri)',
+                    helperText: 'Distanza massima per timbrature valide',
+                    prefixIcon: Icon(Icons.radar),
+                  ),
+                  keyboardType: TextInputType.number,
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Inserire il raggio';
+                    }
+                    final radius = double.tryParse(value);
+                    if (radius == null || radius < 10 || radius > 1000) {
+                      return 'Inserire un valore tra 10 e 1000 metri';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue[50],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.place, size: 16, color: Colors.blue[700]),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Indirizzo:',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue[700],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        address,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(Icons.gps_fixed, size: 16, color: Colors.blue[700]),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Coordinate:',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue[700],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Lat: ${_newWorkSitePosition!.latitude.toStringAsFixed(6)}\n'
+                        'Lng: ${_newWorkSitePosition!.longitude.toStringAsFixed(6)}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -744,6 +1037,7 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
                 _newWorkSitePosition = null;
               });
               _nameController.clear();
+              _descriptionController.clear();
             },
             child: const Text('Annulla'),
           ),
@@ -756,6 +1050,9 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
                   longitude: _newWorkSitePosition!.longitude,
                   address: address,
                   radiusMeters: double.parse(_radiusController.text),
+                  description: _descriptionController.text.isNotEmpty 
+                      ? _descriptionController.text 
+                      : null,
                 );
 
                 try {
@@ -768,6 +1065,7 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
                     _newWorkSitePosition = null;
                   });
                   _nameController.clear();
+                  _descriptionController.clear();
                   _radiusController.text = '100';
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Cantiere aggiunto con successo')),

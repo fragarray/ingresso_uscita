@@ -1,13 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models/employee.dart';
 import 'pages/login_page.dart';
 import 'pages/admin_page.dart';
 import 'pages/employee_page.dart';
+import 'services/api_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Blocca l'orientamento solo in verticale (portrait)
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+  
   runApp(
     ChangeNotifierProvider(
       create: (_) => AppState(),
@@ -32,15 +42,58 @@ class AppState extends ChangeNotifier {
   }
   
   Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    _minGpsAccuracyPercent = prefs.getDouble('minGpsAccuracyPercent') ?? 75.0;
+    // PRIMA prova a caricare dal SERVER (fonte di verità)
+    try {
+      final serverValue = await ApiService.getSetting('minGpsAccuracyPercent');
+      if (serverValue != null) {
+        _minGpsAccuracyPercent = double.tryParse(serverValue) ?? 75.0;
+        debugPrint('✓ GPS accuracy loaded from SERVER: $_minGpsAccuracyPercent%');
+        
+        // Salva in cache locale per offline
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setDouble('minGpsAccuracyPercent', _minGpsAccuracyPercent);
+      } else {
+        // Fallback: carica da SharedPreferences (cache locale)
+        final prefs = await SharedPreferences.getInstance();
+        _minGpsAccuracyPercent = prefs.getDouble('minGpsAccuracyPercent') ?? 75.0;
+        debugPrint('⚠️ GPS accuracy loaded from LOCAL CACHE: $_minGpsAccuracyPercent%');
+      }
+    } catch (e) {
+      // Errore rete: fallback a cache locale
+      debugPrint('❌ Error loading from server, using local cache: $e');
+      final prefs = await SharedPreferences.getInstance();
+      _minGpsAccuracyPercent = prefs.getDouble('minGpsAccuracyPercent') ?? 75.0;
+    }
+    
     notifyListeners();
   }
   
-  Future<void> setMinGpsAccuracyPercent(double value) async {
+  Future<void> setMinGpsAccuracyPercent(double value, {int? adminId}) async {
     _minGpsAccuracyPercent = value;
+    
+    // Salva PRIMA sul SERVER (fonte di verità)
+    if (adminId != null) {
+      try {
+        final success = await ApiService.updateSetting(
+          key: 'minGpsAccuracyPercent',
+          value: value.toString(),
+          adminId: adminId,
+        );
+        
+        if (success) {
+          debugPrint('✓ GPS accuracy saved to SERVER: $value%');
+        } else {
+          debugPrint('⚠️ Failed to save GPS accuracy to server');
+        }
+      } catch (e) {
+        debugPrint('❌ Error saving to server: $e');
+      }
+    }
+    
+    // Salva ANCHE in cache locale per offline
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('minGpsAccuracyPercent', value);
+    
     notifyListeners();
   }
   

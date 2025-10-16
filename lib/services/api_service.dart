@@ -19,8 +19,10 @@ class ApiService {
 
     final prefs = await SharedPreferences.getInstance();
     final savedIp = prefs.getString('serverIp');
+    final savedPort = prefs.getInt('serverPort') ?? 3000;
+    
     _cachedBaseUrl = savedIp != null
-        ? 'http://$savedIp:3000/api'
+        ? 'http://$savedIp:$savedPort/api'
         : _defaultBaseUrl;
     return _cachedBaseUrl!;
   }
@@ -29,7 +31,24 @@ class ApiService {
   static Future<void> setServerIp(String ip) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('serverIp', ip);
-    _cachedBaseUrl = 'http://$ip:3000/api';
+    
+    final savedPort = prefs.getInt('serverPort') ?? 3000;
+    _cachedBaseUrl = 'http://$ip:$savedPort/api';
+  }
+
+  // Set new server port
+  static Future<void> setServerPort(int port) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('serverPort', port);
+    
+    final savedIp = prefs.getString('serverIp');
+    if (savedIp != null) {
+      _cachedBaseUrl = 'http://$savedIp:$port/api';
+    } else {
+      // Usa il default IP con la nuova porta
+      final uri = Uri.parse(_defaultBaseUrl);
+      _cachedBaseUrl = 'http://${uri.host}:$port/api';
+    }
   }
 
   // Get default server IP (without port)
@@ -40,9 +59,12 @@ class ApiService {
   }
 
   // Test server connection and validate identity
-  static Future<Map<String, dynamic>> pingServer(String ip) async {
+  static Future<Map<String, dynamic>> pingServer(String ip, [int? port]) async {
     try {
-      final testUrl = 'http://$ip:3000/api/ping';
+      final prefs = await SharedPreferences.getInstance();
+      final serverPort = port ?? prefs.getInt('serverPort') ?? 3000;
+      
+      final testUrl = 'http://$ip:$serverPort/api/ping';
       final response = await http
           .get(Uri.parse(testUrl))
           .timeout(const Duration(seconds: 5));
@@ -529,6 +551,70 @@ class ApiService {
       return null;
     } catch (e) {
       print('Download forced attendance report error: $e');
+      return null;
+    }
+  }
+
+  // ==================== APP SETTINGS (GPS ACCURACY, ETC.) ====================
+
+  // Ottieni impostazione dal server
+  static Future<String?> getSetting(String key) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http.get(Uri.parse('$baseUrl/settings/$key'));
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return data['value'] as String?;
+      }
+      return null;
+    } catch (e) {
+      print('Get setting error: $e');
+      return null;
+    }
+  }
+
+  // Aggiorna impostazione sul server (solo admin)
+  static Future<bool> updateSetting({
+    required String key,
+    required String value,
+    required int adminId,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http.put(
+        Uri.parse('$baseUrl/settings/$key'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'value': value,
+          'adminId': adminId,
+        }),
+      );
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        print('Setting updated: ${data['updatedBy']} changed $key to $value');
+        return true;
+      }
+      return false;
+    } catch (e) {
+      print('Update setting error: $e');
+      return false;
+    }
+  }
+
+  // Ottieni tutte le impostazioni
+  static Future<Map<String, dynamic>?> getAllSettings() async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http.get(Uri.parse('$baseUrl/settings'));
+      
+      if (response.statusCode == 200) {
+        return json.decode(response.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (e) {
+      print('Get all settings error: $e');
       return null;
     }
   }
