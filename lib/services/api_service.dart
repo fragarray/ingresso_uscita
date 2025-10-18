@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 import '../models/attendance_record.dart';
 import '../models/employee.dart';
 import '../models/work_site.dart';
@@ -122,11 +123,15 @@ class ApiService {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         return Employee.fromMap(data);
+      } else if (response.statusCode == 403) {
+        // Account eliminato (soft delete)
+        final data = json.decode(response.body);
+        throw Exception(data['message'] ?? 'Account non più attivo');
       }
       return null;
     } catch (e) {
       print('Login error: $e');
-      return null;
+      rethrow; // Rilancia l'eccezione per gestirla nel widget
     }
   }
 
@@ -187,6 +192,86 @@ class ApiService {
       return success;
     } catch (e) {
       print('Force attendance error: $e');
+      return false;
+    }
+  }
+
+  // Modifica una timbratura esistente
+  static Future<bool> editAttendance({
+    required int recordId,
+    required int adminId,
+    DateTime? timestamp,
+    int? workSiteId,
+    String? notes,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      print('=== EDIT ATTENDANCE API CALL ===');
+      print('Record ID: $recordId');
+      print('Admin ID: $adminId');
+      print('New Timestamp: $timestamp');
+      print('New WorkSite ID: $workSiteId');
+      print('New Notes: $notes');
+
+      final requestBody = {
+        'adminId': adminId,
+        if (timestamp != null) 'timestamp': timestamp.toIso8601String(),
+        if (workSiteId != null) 'workSiteId': workSiteId,
+        if (notes != null) 'notes': notes,
+      };
+      print('Request body: ${json.encode(requestBody)}');
+
+      final response = await http.put(
+        Uri.parse('$baseUrl/attendance/$recordId'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(requestBody),
+      );
+
+      print('Response status: ${response.statusCode}');
+      print('Response body: ${response.body}');
+
+      final success = response.statusCode == 200;
+      print('Edit attendance success: $success');
+      return success;
+    } catch (e) {
+      print('Edit attendance error: $e');
+      return false;
+    }
+  }
+
+  // Elimina una timbratura esistente
+  static Future<bool> deleteAttendance({
+    required int recordId,
+    required int adminId,
+    bool deleteOutToo = false,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      print('=== DELETE ATTENDANCE API CALL ===');
+      print('Record ID: $recordId');
+      print('Admin ID: $adminId');
+      print('Delete OUT too: $deleteOutToo');
+
+      final requestBody = {
+        'adminId': adminId,
+        'deleteOutToo': deleteOutToo,
+      };
+      print('Request body: ${json.encode(requestBody)}');
+
+      final response = await http.delete(
+        Uri.parse('$baseUrl/attendance/$recordId'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(requestBody),
+      );
+
+      print('Response status: ${response.statusCode}');
+      print('Response body: ${response.body}');
+
+      final success = response.statusCode == 200;
+      print('Delete attendance success: $success');
+      return success;
+    } catch (e) {
+      print('Delete attendance error: $e');
       return false;
     }
   }
@@ -551,6 +636,50 @@ class ApiService {
       return null;
     } catch (e) {
       print('Download forced attendance report error: $e');
+      return null;
+    }
+  }
+
+  // Download report audit amministratore
+  static Future<String?> downloadAdminAuditReport({
+    required int adminId,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final queryParams = <String, String>{
+        'adminId': adminId.toString(),
+      };
+      if (startDate != null) {
+        queryParams['startDate'] = DateFormat('yyyy-MM-dd').format(startDate);
+      }
+      if (endDate != null) {
+        queryParams['endDate'] = DateFormat('yyyy-MM-dd').format(endDate);
+      }
+
+      final uri = Uri.parse(
+        '$baseUrl/admin/audit-report',
+      ).replace(queryParameters: queryParams);
+
+      print('📋 Requesting admin audit report: $uri');
+      final response = await http.get(uri);
+      if (response.statusCode == 200) {
+        final bytes = response.bodyBytes;
+        final dir = await getApplicationDocumentsDirectory();
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final file = File(
+          '${dir.path}/report_audit_admin_$timestamp.xlsx',
+        );
+        await file.writeAsBytes(bytes);
+        print('✅ Admin audit report saved: ${file.path}');
+        return file.path;
+      } else {
+        print('❌ Error response: ${response.statusCode} - ${response.body}');
+      }
+      return null;
+    } catch (e) {
+      print('❌ Download admin audit report error: $e');
       return null;
     }
   }

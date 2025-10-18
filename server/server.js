@@ -48,6 +48,49 @@ app.use((req, res, next) => {
   next();
 });
 
+// ==================== AUDIT LOG HELPER ====================
+/**
+ * Funzione per registrare operazioni amministrative nell'audit log
+ * @param {number} adminId - ID dell'amministratore che esegue l'azione
+ * @param {string} action - Tipo di azione (FORCE_IN, FORCE_OUT, EDIT_ATTENDANCE, DELETE_ATTENDANCE, CREATE_EMPLOYEE, etc.)
+ * @param {string} targetType - Tipo di entità target (ATTENDANCE, EMPLOYEE, WORKSITE, SETTING)
+ * @param {number|null} targetId - ID dell'entità target
+ * @param {string|null} targetName - Nome descrittivo del target
+ * @param {object|null} oldValue - Valore precedente (per UPDATE)
+ * @param {object|null} newValue - Nuovo valore
+ * @param {string|null} details - Dettagli aggiuntivi
+ * @param {string|null} ipAddress - Indirizzo IP del client
+ */
+const logAuditAction = (adminId, action, targetType, targetId = null, targetName = null, oldValue = null, newValue = null, details = null, ipAddress = null) => {
+  const query = `
+    INSERT INTO audit_log (
+      adminId, action, targetType, targetId, targetName, 
+      oldValue, newValue, details, ipAddress
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+  
+  const oldValueStr = oldValue ? JSON.stringify(oldValue) : null;
+  const newValueStr = newValue ? JSON.stringify(newValue) : null;
+  
+  db.run(query, [
+    adminId, 
+    action, 
+    targetType, 
+    targetId, 
+    targetName,
+    oldValueStr,
+    newValueStr,
+    details,
+    ipAddress
+  ], (err) => {
+    if (err) {
+      console.error('❌ [AUDIT LOG] Error:', err.message);
+    } else {
+      console.log(`✅ [AUDIT LOG] ${action} by admin ${adminId} on ${targetType} ${targetId || ''}`);
+    }
+  });
+};
+
 // Mount routes
 app.use('/api/worksites', worksitesRoutes);
 
@@ -563,6 +606,16 @@ app.post('/api/login', (req, res) => {
       return;
     }
     
+    // ⚠️ VALIDAZIONE CRITICA: Controlla se l'account è stato eliminato (soft delete)
+    if (row.deleted === 1) {
+      console.log(`🚫 [LOGIN] Account eliminato - ID: ${row.id}, Nome: ${row.name}, Email: ${email}`);
+      res.status(403).json({ 
+        error: 'Account non più attivo',
+        message: 'Questo account è stato disattivato. Contatta l\'amministratore per maggiori informazioni.'
+      });
+      return;
+    }
+    
     console.log(`✅ [LOGIN] Login riuscito - ID: ${row.id}, Nome: ${row.name}, Admin: ${row.isAdmin ? 'Sì' : 'No'}`);
     
     // Non inviare la password al client
@@ -735,6 +788,30 @@ app.post('/api/attendance/force', (req, res) => {
         console.log(`✅ [TIMBRATURA FORZATA] Registrata con successo - Record ID: ${this.lastID}`);
         console.log(`   📋 DeviceInfo: ${deviceInfo}`);
         
+        // 🔍 AUDIT LOG: Registra l'azione di timbratura forzata
+        db.get('SELECT name FROM employees WHERE id = ?', [employeeId], (err, employee) => {
+          if (!err && employee) {
+            logAuditAction(
+              adminId,
+              type === 'in' ? 'FORCE_IN' : 'FORCE_OUT',
+              'ATTENDANCE',
+              this.lastID,
+              employee.name,
+              null,
+              {
+                employeeId,
+                employeeName: employee.name,
+                workSiteId,
+                timestamp: finalTimestamp,
+                type,
+                notes: notes || null
+              },
+              `Timbratura forzata ${type.toUpperCase()} per ${employee.name}${notes ? ` - ${notes}` : ''}`,
+              req.ip || req.connection.remoteAddress
+            );
+          }
+        });
+        
         // Aggiorna il report Excel
         try {
           await updateExcelReport();
@@ -745,6 +822,405 @@ app.post('/api/attendance/force', (req, res) => {
           res.json({ success: true, message: 'Forced attendance recorded' });
         }
       });
+  });
+});
+
+// PUT endpoint per modificare una timbratura esistente
+app.put('/api/attendance/:id', (req, res) => {
+  const { id } = req.params;
+  const { timestamp, workSiteId, notes, adminId } = req.body;
+  
+  console.log(`✏️ [MODIFICA TIMBRATURA] Richiesta modifica record ID: ${id}`);
+  console.log(`   👨‍💼 Admin ID: ${adminId}`);
+  console.log(`   ⏰ Nuovo timestamp: ${timestamp || 'non modificato'}`);
+  console.log(`   🏗️  Nuovo cantiere: ${workSiteId || 'non modificato'}`);
+  console.log(`   📝 Nuove note: ${notes || 'non modificate'}`);
+  
+  if (!adminId) {
+    console.error(`❌ [MODIFICA TIMBRATURA] Admin ID mancante`);
+    res.status(400).json({ error: 'Admin ID required' });
+    return;
+  }
+  
+  // Verifica che l'admin esista ed sia effettivamente admin
+  db.get('SELECT * FROM employees WHERE id = ? AND isAdmin = 1', [adminId], (err, admin) => {
+    if (err) {
+      console.error(`❌ [MODIFICA TIMBRATURA] Errore verifica admin:`, err.message);
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    
+    if (!admin) {
+      console.error(`⛔ [MODIFICA TIMBRATURA] Admin ID ${adminId} non autorizzato`);
+      res.status(403).json({ error: 'Unauthorized: Not an admin' });
+      return;
+    }
+    
+    console.log(`✅ [MODIFICA TIMBRATURA] Admin verificato: ${admin.name}`);
+    
+    // Recupera il record esistente
+    db.get('SELECT * FROM attendance_records WHERE id = ?', [id], (err, record) => {
+      if (err) {
+        console.error(`❌ [MODIFICA TIMBRATURA] Errore recupero record:`, err.message);
+        res.status(500).json({ error: err.message });
+        return;
+      }
+      
+      if (!record) {
+        console.error(`❌ [MODIFICA TIMBRATURA] Record ID ${id} non trovato`);
+        res.status(404).json({ error: 'Attendance record not found' });
+        return;
+      }
+      
+      // Prepara i valori da aggiornare (usa valori esistenti se non forniti)
+      const newTimestamp = timestamp || record.timestamp;
+      const newWorkSiteId = workSiteId || record.workSiteId;
+      const newNotes = notes !== undefined ? notes : record.notes;
+      
+      // Aggiungi info dell'admin al deviceInfo
+      let deviceInfo = record.deviceInfo || '';
+      if (!deviceInfo.includes('Modificato da')) {
+        deviceInfo += ` | Modificato da ${admin.name}`;
+      }
+      
+      // Aggiorna il record
+      db.run(`UPDATE attendance_records 
+        SET timestamp = ?, workSiteId = ?, notes = ?, deviceInfo = ?
+        WHERE id = ?`,
+        [newTimestamp, newWorkSiteId, newNotes, deviceInfo, id],
+        async function(err) {
+          if (err) {
+            console.error(`❌ [MODIFICA TIMBRATURA] Errore aggiornamento:`, err.message);
+            res.status(500).json({ error: err.message });
+            return;
+          }
+          
+          console.log(`✅ [MODIFICA TIMBRATURA] Record ID ${id} aggiornato con successo`);
+          console.log(`   📋 DeviceInfo aggiornato: ${deviceInfo}`);
+          
+          // 🔍 AUDIT LOG: Registra la modifica
+          db.get('SELECT name FROM employees WHERE id = ?', [record.employeeId], (err, employee) => {
+            if (!err && employee) {
+              logAuditAction(
+                adminId,
+                'EDIT_ATTENDANCE',
+                'ATTENDANCE',
+                id,
+                employee.name,
+                {
+                  timestamp: record.timestamp,
+                  workSiteId: record.workSiteId,
+                  notes: record.notes
+                },
+                {
+                  timestamp: newTimestamp,
+                  workSiteId: newWorkSiteId,
+                  notes: newNotes
+                },
+                `Modificata timbratura per ${employee.name}`,
+                req.ip || req.connection.remoteAddress
+              );
+            }
+          });
+          
+          // Aggiorna il report Excel
+          try {
+            await updateExcelReport();
+            console.log(`📊 [MODIFICA TIMBRATURA] Report Excel aggiornato`);
+            res.json({ success: true, message: 'Attendance record updated' });
+          } catch (error) {
+            console.error('⚠️  [MODIFICA TIMBRATURA] Errore aggiornamento report Excel:', error.message);
+            res.json({ success: true, message: 'Attendance record updated' });
+          }
+        });
+    });
+  });
+});
+
+// DELETE endpoint per eliminare una timbratura esistente
+app.delete('/api/attendance/:id', (req, res) => {
+  const { id } = req.params;
+  const { adminId, deleteOutToo } = req.body;
+  
+  console.log(`🗑️ [ELIMINA TIMBRATURA] Richiesta eliminazione record ID: ${id}`);
+  console.log(`   👨‍💼 Admin ID: ${adminId}`);
+  console.log(`   🔗 Elimina OUT associato: ${deleteOutToo ? 'Sì' : 'No'}`);
+  
+  if (!adminId) {
+    console.error(`❌ [ELIMINA TIMBRATURA] Admin ID mancante`);
+    res.status(400).json({ error: 'Admin ID required' });
+    return;
+  }
+  
+  // Verifica che l'admin esista ed sia effettivamente admin
+  db.get('SELECT * FROM employees WHERE id = ? AND isAdmin = 1', [adminId], (err, admin) => {
+    if (err) {
+      console.error(`❌ [ELIMINA TIMBRATURA] Errore verifica admin:`, err.message);
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    
+    if (!admin) {
+      console.error(`⛔ [ELIMINA TIMBRATURA] Admin ID ${adminId} non autorizzato`);
+      res.status(403).json({ error: 'Unauthorized: Not an admin' });
+      return;
+    }
+    
+    console.log(`✅ [ELIMINA TIMBRATURA] Admin verificato: ${admin.name}`);
+    
+    // Recupera il record per verificare tipo e ottenere info
+    db.get('SELECT * FROM attendance_records WHERE id = ?', [id], (err, record) => {
+      if (err) {
+        console.error(`❌ [ELIMINA TIMBRATURA] Errore recupero record:`, err.message);
+        res.status(500).json({ error: err.message });
+        return;
+      }
+      
+      if (!record) {
+        console.error(`❌ [ELIMINA TIMBRATURA] Record ID ${id} non trovato`);
+        res.status(404).json({ error: 'Attendance record not found' });
+        return;
+      }
+      
+      console.log(`📋 [ELIMINA TIMBRATURA] Record trovato: Tipo=${record.type}, Dipendente=${record.employeeId}`);
+      
+      // Se è un IN e deleteOutToo è true, cerca e elimina anche l'OUT corrispondente
+      if (record.type === 'in' && deleteOutToo) {
+        // Prima cerca OUT DOPO questo IN (caso normale)
+        db.get(`SELECT id FROM attendance_records 
+          WHERE employeeId = ? AND type = 'out' AND timestamp > ? 
+          ORDER BY timestamp ASC LIMIT 1`,
+          [record.employeeId, record.timestamp],
+          (err, outAfter) => {
+            if (err) {
+              console.error(`⚠️  [ELIMINA TIMBRATURA] Errore ricerca OUT:`, err.message);
+              return;
+            }
+            
+            if (outAfter) {
+              // OUT trovato DOPO l'IN (caso normale)
+              db.run('DELETE FROM attendance_records WHERE id = ?', [outAfter.id], function(err) {
+                if (err) {
+                  console.error(`⚠️  [ELIMINA TIMBRATURA] Errore eliminazione OUT:`, err.message);
+                } else {
+                  console.log(`🗑️ [ELIMINA TIMBRATURA] Eliminato OUT [ID: ${outAfter.id}] successivo`);
+                }
+              });
+            } else {
+              // Nessun OUT dopo, cerca il più vicino in assoluto (gestisce timestamp invertiti)
+              db.get(`SELECT id, timestamp FROM attendance_records 
+                WHERE employeeId = ? AND type = 'out'
+                ORDER BY ABS(CAST((julianday(timestamp) - julianday(?)) * 86400 AS INTEGER)) ASC 
+                LIMIT 1`,
+                [record.employeeId, record.timestamp],
+                (err, nearestOut) => {
+                  if (err) {
+                    console.error(`⚠️  [ELIMINA TIMBRATURA] Errore ricerca OUT più vicino:`, err.message);
+                    return;
+                  }
+                  
+                  if (nearestOut) {
+                    const timeDiff = Math.abs((new Date(nearestOut.timestamp) - new Date(record.timestamp)) / 1000 / 60);
+                    console.log(`⚠️  [ELIMINA TIMBRATURA] OUT più vicino ha timestamp ${nearestOut.timestamp < record.timestamp ? 'PRECEDENTE' : 'SUCCESSIVO'}`);
+                    console.log(`   Differenza: ${timeDiff.toFixed(0)} minuti`);
+                    
+                    // Elimina solo se la differenza è ragionevole (< 24 ore)
+                    if (timeDiff < 1440) {
+                      db.run('DELETE FROM attendance_records WHERE id = ?', [nearestOut.id], function(err) {
+                        if (err) {
+                          console.error(`⚠️  [ELIMINA TIMBRATURA] Errore eliminazione OUT:`, err.message);
+                        } else {
+                          console.log(`🗑️ [ELIMINA TIMBRATURA] Eliminato OUT [ID: ${nearestOut.id}] più vicino`);
+                        }
+                      });
+                    } else {
+                      console.log(`⚠️  [ELIMINA TIMBRATURA] OUT troppo distante (${timeDiff.toFixed(0)} min), non eliminato`);
+                    }
+                  } else {
+                    console.log(`⚠️  [ELIMINA TIMBRATURA] Nessun OUT trovato per dipendente ${record.employeeId}`);
+                  }
+                }
+              );
+            }
+          }
+        );
+      }
+      
+      // Elimina il record principale
+      db.run('DELETE FROM attendance_records WHERE id = ?', [id], async function(err) {
+        if (err) {
+          console.error(`❌ [ELIMINA TIMBRATURA] Errore eliminazione:`, err.message);
+          res.status(500).json({ error: err.message });
+          return;
+        }
+        
+        console.log(`✅ [ELIMINA TIMBRATURA] Record ID ${id} eliminato con successo`);
+        
+        // 🔍 AUDIT LOG: Registra l'eliminazione
+        db.get('SELECT name FROM employees WHERE id = ?', [record.employeeId], (err, employee) => {
+          if (!err && employee) {
+            logAuditAction(
+              adminId,
+              'DELETE_ATTENDANCE',
+              'ATTENDANCE',
+              id,
+              employee.name,
+              {
+                employeeId: record.employeeId,
+                employeeName: employee.name,
+                timestamp: record.timestamp,
+                type: record.type,
+                workSiteId: record.workSiteId,
+                notes: record.notes
+              },
+              null,
+              `Eliminata timbratura ${record.type.toUpperCase()} per ${employee.name}${deleteOutToo ? ' (con OUT associato)' : ''}`,
+              req.ip || req.connection.remoteAddress
+            );
+          }
+        });
+        
+        // Aggiorna il report Excel
+        try {
+          await updateExcelReport();
+          console.log(`📊 [ELIMINA TIMBRATURA] Report Excel aggiornato`);
+          res.json({ success: true, message: 'Attendance record deleted' });
+        } catch (error) {
+          console.error('⚠️  [ELIMINA TIMBRATURA] Errore aggiornamento report Excel:', error.message);
+          res.json({ success: true, message: 'Attendance record deleted' });
+        }
+      });
+    });
+  });
+});
+
+// ==================== AUDIT LOG ENDPOINT ====================
+
+/**
+ * GET /api/audit-log
+ * Recupera log delle operazioni amministrative
+ * Query params:
+ * - adminId: Filtra per ID amministratore
+ * - startDate: Data inizio (YYYY-MM-DD)
+ * - endDate: Data fine (YYYY-MM-DD)
+ * - action: Filtra per tipo azione
+ * - targetType: Filtra per tipo entità
+ * - limit: Numero massimo risultati (default 1000)
+ */
+app.get('/api/audit-log', (req, res) => {
+  const { adminId, startDate, endDate, action, targetType, limit = 1000 } = req.query;
+  
+  console.log(`📋 [AUDIT LOG] Richiesta log audit`);
+  console.log(`   👨‍💼 Admin ID: ${adminId || 'Tutti'}`);
+  console.log(`   📅 Periodo: ${startDate || 'Sempre'} → ${endDate || 'Ora'}`);
+  console.log(`   🎯 Azione: ${action || 'Tutte'}`);
+  console.log(`   📦 Tipo target: ${targetType || 'Tutti'}`);
+  
+  let query = `
+    SELECT 
+      al.*,
+      e.name as adminName,
+      e.email as adminEmail
+    FROM audit_log al
+    LEFT JOIN employees e ON al.adminId = e.id
+    WHERE 1=1
+  `;
+  
+  const params = [];
+  
+  if (adminId) {
+    query += ' AND al.adminId = ?';
+    params.push(adminId);
+  }
+  
+  if (startDate) {
+    query += ' AND DATE(al.timestamp) >= DATE(?)';
+    params.push(startDate);
+  }
+  
+  if (endDate) {
+    query += ' AND DATE(al.timestamp) <= DATE(?)';
+    params.push(endDate);
+  }
+  
+  if (action) {
+    query += ' AND al.action = ?';
+    params.push(action);
+  }
+  
+  if (targetType) {
+    query += ' AND al.targetType = ?';
+    params.push(targetType);
+  }
+  
+  query += ' ORDER BY al.timestamp DESC LIMIT ?';
+  params.push(parseInt(limit));
+  
+  db.all(query, params, (err, rows) => {
+    if (err) {
+      console.error(`❌ [AUDIT LOG] Errore query:`, err.message);
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    
+    console.log(`✅ [AUDIT LOG] Trovati ${rows.length} record`);
+    
+    // Parse JSON fields
+    const parsedRows = rows.map(row => ({
+      ...row,
+      oldValue: row.oldValue ? JSON.parse(row.oldValue) : null,
+      newValue: row.newValue ? JSON.parse(row.newValue) : null
+    }));
+    
+    res.json(parsedRows);
+  });
+});
+
+/**
+ * GET /api/audit-log/summary
+ * Riepilogo statistiche audit log per amministratore
+ */
+app.get('/api/audit-log/summary', (req, res) => {
+  const { adminId, startDate, endDate } = req.query;
+  
+  console.log(`📊 [AUDIT SUMMARY] Richiesta riepilogo per admin ${adminId}`);
+  
+  let query = `
+    SELECT 
+      action,
+      COUNT(*) as count
+    FROM audit_log
+    WHERE 1=1
+  `;
+  
+  const params = [];
+  
+  if (adminId) {
+    query += ' AND adminId = ?';
+    params.push(adminId);
+  }
+  
+  if (startDate) {
+    query += ' AND DATE(timestamp) >= DATE(?)';
+    params.push(startDate);
+  }
+  
+  if (endDate) {
+    query += ' AND DATE(timestamp) <= DATE(?)';
+    params.push(endDate);
+  }
+  
+  query += ' GROUP BY action ORDER BY count DESC';
+  
+  db.all(query, params, (err, rows) => {
+    if (err) {
+      console.error(`❌ [AUDIT SUMMARY] Errore:`, err.message);
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    
+    console.log(`✅ [AUDIT SUMMARY] Riepilogo generato: ${rows.length} tipi di azioni`);
+    res.json(rows);
   });
 });
 
@@ -3423,6 +3899,348 @@ app.get('/api/attendance/forced-report', async (req, res) => {
 });
 
 // ==================== END FORCED ATTENDANCE REPORT ====================
+
+// ==================== ADMIN AUDIT REPORT ====================
+
+/**
+ * Genera un report Excel completo delle operazioni amministrative
+ * con statistiche e log dettagliato
+ */
+const generateAdminAuditReport = async (filters) => {
+  const { adminId, startDate, endDate } = filters;
+  
+  console.log('🔍 [AUDIT REPORT] Generazione report audit amministratore');
+  console.log(`   Admin ID: ${adminId}`);
+  console.log(`   Periodo: ${startDate} → ${endDate}`);
+  
+  // Query per recuperare log audit
+  let logQuery = `
+    SELECT 
+      al.*,
+      e.name as adminName,
+      e.email as adminEmail,
+      te.name as targetEmployeeName
+    FROM audit_log al
+    LEFT JOIN employees e ON al.adminId = e.id
+    LEFT JOIN employees te ON al.targetType = 'ATTENDANCE' AND 
+      (json_extract(al.newValue, '$.employeeId') = te.id OR 
+       json_extract(al.oldValue, '$.employeeId') = te.id)
+    WHERE 1=1
+  `;
+  
+  const params = [];
+  
+  if (adminId) {
+    logQuery += ' AND al.adminId = ?';
+    params.push(adminId);
+  }
+  
+  if (startDate) {
+    logQuery += ' AND DATE(al.timestamp) >= DATE(?)';
+    params.push(startDate);
+  }
+  
+  if (endDate) {
+    logQuery += ' AND DATE(al.timestamp) <= DATE(?)';
+    params.push(endDate);
+  }
+  
+  logQuery += ' ORDER BY al.timestamp DESC';
+  
+  // Query per statistiche
+  let statsQuery = `
+    SELECT 
+      action,
+      COUNT(*) as count
+    FROM audit_log
+    WHERE 1=1
+  `;
+  
+  const statsParams = [];
+  
+  if (adminId) {
+    statsQuery += ' AND adminId = ?';
+    statsParams.push(adminId);
+  }
+  
+  if (startDate) {
+    statsQuery += ' AND DATE(timestamp) >= DATE(?)';
+    statsParams.push(startDate);
+  }
+  
+  if (endDate) {
+    statsQuery += ' AND DATE(timestamp) <= DATE(?)';
+    statsParams.push(endDate);
+  }
+  
+  statsQuery += ' GROUP BY action ORDER BY count DESC';
+  
+  return new Promise((resolve, reject) => {
+    // Recupera log
+    db.all(logQuery, params, async (err, logs) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      
+      // Recupera statistiche
+      db.all(statsQuery, statsParams, async (err, stats) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        
+        // Recupera info admin se filtrato per adminId
+        let adminInfo = null;
+        if (adminId) {
+          await new Promise((res, rej) => {
+            db.get('SELECT * FROM employees WHERE id = ?', [adminId], (err, admin) => {
+              if (!err && admin) adminInfo = admin;
+              res();
+            });
+          });
+        }
+        
+        try {
+          const workbook = new ExcelJS.Workbook();
+          
+          // ===== FOGLIO 1: RIEPILOGO =====
+          const summarySheet = workbook.addWorksheet('Riepilogo');
+          
+          // Titolo
+          summarySheet.mergeCells('A1:F1');
+          const titleCell = summarySheet.getCell('A1');
+          titleCell.value = '📋 REPORT AUDIT OPERAZIONI AMMINISTRATIVE';
+          titleCell.font = { size: 16, bold: true, color: { argb: 'FFFFFFFF' } };
+          titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2C3E50' } };
+          titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+          summarySheet.getRow(1).height = 30;
+          
+          // Info report
+          summarySheet.addRow([]);
+          summarySheet.addRow(['📅 Data generazione:', new Date().toLocaleString('it-IT')]);
+          
+          if (adminInfo) {
+            summarySheet.addRow(['👤 Amministratore:', adminInfo.name]);
+            summarySheet.addRow(['📧 Email:', adminInfo.email]);
+          } else {
+            summarySheet.addRow(['👤 Amministratore:', 'TUTTI']);
+          }
+          
+          summarySheet.addRow(['📆 Periodo:', `${startDate || 'Sempre'} → ${endDate || 'Oggi'}`]);
+          summarySheet.addRow(['📊 Totale operazioni:', logs.length]);
+          
+          // Statistiche per tipo azione
+          summarySheet.addRow([]);
+          summarySheet.addRow(['🎯 STATISTICHE PER TIPO OPERAZIONE']);
+          
+          const statsHeaderRow = summarySheet.addRow(['Tipo Operazione', 'Numero', 'Percentuale']);
+          statsHeaderRow.font = { bold: true };
+          statsHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F4F8' } };
+          
+          const totalOps = logs.length;
+          stats.forEach(stat => {
+            const percentage = totalOps > 0 ? ((stat.count / totalOps) * 100).toFixed(1) : 0;
+            summarySheet.addRow([
+              getActionLabel(stat.action),
+              stat.count,
+              `${percentage}%`
+            ]);
+          });
+          
+          // Formattazione colonne riepilogo
+          summarySheet.getColumn(1).width = 30;
+          summarySheet.getColumn(2).width = 20;
+          summarySheet.getColumn(3).width = 15;
+          
+          // ===== FOGLIO 2: LOG DETTAGLIATO =====
+          const logSheet = workbook.addWorksheet('Log Operazioni');
+          
+          // Header
+          const headerRow = logSheet.addRow([
+            'ID',
+            'Data/Ora',
+            'Amministratore',
+            'Operazione',
+            'Tipo Target',
+            'Target',
+            'Dipendente Interessato',
+            'Dettagli',
+            'IP'
+          ]);
+          
+          headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+          headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF3498DB' } };
+          headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+          headerRow.height = 20;
+          
+          // Dati
+          logs.forEach(log => {
+            const newValue = log.newValue ? JSON.parse(log.newValue) : null;
+            const oldValue = log.oldValue ? JSON.parse(log.oldValue) : null;
+            
+            const row = logSheet.addRow([
+              log.id,
+              new Date(log.timestamp).toLocaleString('it-IT'),
+              log.adminName || `ID ${log.adminId}`,
+              getActionLabel(log.action),
+              getTargetTypeLabel(log.targetType),
+              log.targetName || `ID ${log.targetId}`,
+              log.targetEmployeeName || (newValue?.employeeName || oldValue?.employeeName || '-'),
+              log.details || '-',
+              log.ipAddress || '-'
+            ]);
+            
+            // Colora in base al tipo azione
+            if (log.action.includes('DELETE')) {
+              row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFEBEE' } };
+            } else if (log.action.includes('FORCE')) {
+              row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3E0' } };
+            } else if (log.action.includes('EDIT')) {
+              row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F8E9' } };
+            }
+          });
+          
+          // Formattazione colonne log
+          logSheet.getColumn(1).width = 8;  // ID
+          logSheet.getColumn(2).width = 20; // Data/Ora
+          logSheet.getColumn(3).width = 20; // Admin
+          logSheet.getColumn(4).width = 20; // Operazione
+          logSheet.getColumn(5).width = 15; // Tipo Target
+          logSheet.getColumn(6).width = 20; // Target
+          logSheet.getColumn(7).width = 20; // Dipendente
+          logSheet.getColumn(8).width = 50; // Dettagli
+          logSheet.getColumn(9).width = 15; // IP
+          
+          // ===== FOGLIO 3: DETTAGLI MODIFICHE =====
+          const changesSheet = workbook.addWorksheet('Dettagli Modifiche');
+          
+          const changesHeaderRow = changesSheet.addRow([
+            'ID',
+            'Data/Ora',
+            'Operazione',
+            'Dipendente',
+            'Campo Modificato',
+            'Valore Precedente',
+            'Nuovo Valore'
+          ]);
+          
+          changesHeaderRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+          changesHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF9B59B6' } };
+          changesHeaderRow.alignment = { horizontal: 'center', vertical: 'middle' };
+          
+          logs.forEach(log => {
+            if (log.oldValue || log.newValue) {
+              const oldVal = log.oldValue ? JSON.parse(log.oldValue) : {};
+              const newVal = log.newValue ? JSON.parse(log.newValue) : {};
+              
+              // Trova campi modificati
+              const allKeys = new Set([...Object.keys(oldVal), ...Object.keys(newVal)]);
+              
+              allKeys.forEach(key => {
+                const oldValue = oldVal[key];
+                const newValue = newVal[key];
+                
+                if (oldValue !== newValue) {
+                  changesSheet.addRow([
+                    log.id,
+                    new Date(log.timestamp).toLocaleString('it-IT'),
+                    getActionLabel(log.action),
+                    log.targetName || log.targetEmployeeName || '-',
+                    key,
+                    formatValue(oldValue),
+                    formatValue(newValue)
+                  ]);
+                }
+              });
+            }
+          });
+          
+          changesSheet.getColumn(1).width = 8;
+          changesSheet.getColumn(2).width = 20;
+          changesSheet.getColumn(3).width = 20;
+          changesSheet.getColumn(4).width = 20;
+          changesSheet.getColumn(5).width = 20;
+          changesSheet.getColumn(6).width = 30;
+          changesSheet.getColumn(7).width = 30;
+          
+          // Salva file
+          const fileName = `audit_report_${adminInfo ? adminInfo.name.replace(/\s+/g, '_') : 'ALL'}_${Date.now()}.xlsx`;
+          const filePath = path.join(__dirname, 'reports', fileName);
+          
+          // Crea cartella reports se non esiste
+          if (!fs.existsSync(path.join(__dirname, 'reports'))) {
+            fs.mkdirSync(path.join(__dirname, 'reports'));
+          }
+          
+          await workbook.xlsx.writeFile(filePath);
+          
+          console.log(`✅ [AUDIT REPORT] Report generato: ${fileName}`);
+          resolve(filePath);
+        } catch (error) {
+          console.error('❌ [AUDIT REPORT] Errore generazione:', error);
+          reject(error);
+        }
+      });
+    });
+  });
+};
+
+// Helper: Label operazioni
+const getActionLabel = (action) => {
+  const labels = {
+    'FORCE_IN': '➡️ Timbratura IN Forzata',
+    'FORCE_OUT': '⬅️ Timbratura OUT Forzata',
+    'EDIT_ATTENDANCE': '✏️ Modifica Timbratura',
+    'DELETE_ATTENDANCE': '🗑️ Elimina Timbratura',
+    'CREATE_EMPLOYEE': '➕ Crea Dipendente',
+    'EDIT_EMPLOYEE': '✏️ Modifica Dipendente',
+    'DELETE_EMPLOYEE': '🗑️ Elimina Dipendente',
+    'CREATE_WORKSITE': '🏗️ Crea Cantiere',
+    'EDIT_WORKSITE': '✏️ Modifica Cantiere',
+    'DELETE_WORKSITE': '🗑️ Elimina Cantiere'
+  };
+  return labels[action] || action;
+};
+
+// Helper: Label tipo target
+const getTargetTypeLabel = (type) => {
+  const labels = {
+    'ATTENDANCE': '⏱️ Timbratura',
+    'EMPLOYEE': '👤 Dipendente',
+    'WORKSITE': '🏗️ Cantiere',
+    'SETTING': '⚙️ Impostazione'
+  };
+  return labels[type] || type;
+};
+
+// Helper: Formatta valori
+const formatValue = (value) => {
+  if (value === null || value === undefined) return '-';
+  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'boolean') return value ? 'Sì' : 'No';
+  return String(value);
+};
+
+// Endpoint per scaricare il report audit amministratore
+app.get('/api/admin/audit-report', async (req, res) => {
+  try {
+    const filters = {
+      adminId: req.query.adminId,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate
+    };
+    
+    console.log('📋 Generating admin audit report with filters:', filters);
+    const filePath = await generateAdminAuditReport(filters);
+    res.download(filePath);
+  } catch (error) {
+    console.error('❌ Error generating admin audit report:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== END ADMIN AUDIT REPORT ====================
 
 // ==================== EMAIL CONFIGURATION API ====================
 

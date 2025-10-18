@@ -130,6 +130,47 @@ db.serialize(() => {
     }
   });
   
+  // 🔍 Tabella audit_log per tracciare TUTTE le operazioni amministrative
+  db.run(`CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    adminId INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    targetType TEXT NOT NULL,
+    targetId INTEGER,
+    targetName TEXT,
+    oldValue TEXT,
+    newValue TEXT,
+    details TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    ipAddress TEXT,
+    FOREIGN KEY (adminId) REFERENCES employees (id)
+  )`, (err) => {
+    if (!err) {
+      console.log('✅ Table audit_log created successfully');
+    } else {
+      console.log('✓ Table audit_log already exists');
+    }
+  });
+  
+  // Crea indici per query veloci su audit_log
+  db.run(`CREATE INDEX IF NOT EXISTS idx_audit_adminId ON audit_log (adminId)`, (err) => {
+    if (!err) {
+      console.log('✓ Index idx_audit_adminId created');
+    }
+  });
+  
+  db.run(`CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log (timestamp)`, (err) => {
+    if (!err) {
+      console.log('✓ Index idx_audit_timestamp created');
+    }
+  });
+  
+  db.run(`CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log (action)`, (err) => {
+    if (!err) {
+      console.log('✓ Index idx_audit_action created');
+    }
+  });
+  
   // Verifica struttura tabella work_sites
   db.all(`PRAGMA table_info(work_sites)`, [], (err, columns) => {
     if (!err) {

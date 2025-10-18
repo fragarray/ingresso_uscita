@@ -259,6 +259,60 @@ class _ReportsTabState extends State<ReportsTab> {
     }
   }
 
+  Future<void> _generateAdminAuditReport() async {
+    // Verifica che sia selezionato un amministratore
+    if (_selectedEmployee == null || !_selectedEmployee!.isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Seleziona un amministratore per generare il report audit'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      final filePath = await ApiService.downloadAdminAuditReport(
+        adminId: _selectedEmployee!.id!,
+        startDate: _startDate,
+        endDate: _endDate,
+      );
+
+      if (filePath != null) {
+        await OpenFile.open(filePath);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Report Audit generato per ${_selectedEmployee!.name}'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Errore durante la generazione del report audit'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Errore: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
   Future<void> _selectDate(bool isStartDate) async {
     final DateTime? picked = await showDatePicker(
       context: context,
@@ -906,6 +960,44 @@ class _ReportsTabState extends State<ReportsTab> {
                           ),
                         ),
                       ),
+                      const SizedBox(height: 8),
+                      // Quarta riga: Report Audit Amministratore (full width)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: (_isLoading || _selectedEmployee == null || !(_selectedEmployee?.isAdmin ?? false))
+                              ? null
+                              : _generateAdminAuditReport,
+                          icon: _isLoading
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                      Colors.white,
+                                    ),
+                                  ),
+                                )
+                              : const Icon(Icons.admin_panel_settings, size: 20),
+                          label: Text(
+                            _selectedEmployee != null && (_selectedEmployee?.isAdmin ?? false)
+                                ? 'Report Audit Admin: ${_selectedEmployee!.name}'
+                                : 'Report Audit Amministratore (Seleziona Admin)',
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 24,
+                              vertical: 20,
+                            ),
+                            backgroundColor: (_selectedEmployee?.isAdmin ?? false)
+                                ? const Color(0xFF6C3483)
+                                : Colors.grey,
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -967,6 +1059,17 @@ class _ReportsTabState extends State<ReportsTab> {
                           const Color(0xFFFF6B35),
                           'Timbrature Forzate:',
                           'Report dettagliato con 4 fogli: Riepilogo dipendenti, Dettaglio completo, Statistiche cantieri, Statistiche amministratori. Utile per identificare abusi.',
+                        ),
+                        const SizedBox(height: 4),
+                        _buildInfoRow(
+                          Icons.admin_panel_settings,
+                          (_selectedEmployee?.isAdmin ?? false)
+                              ? const Color(0xFF6C3483)
+                              : Colors.grey,
+                          'Audit Amministratore:',
+                          (_selectedEmployee?.isAdmin ?? false)
+                              ? 'Report completo delle operazioni di ${_selectedEmployee!.name}: timbrature forzate, modifiche, eliminazioni. Include statistiche, log dettagliato e cronologia modifiche.'
+                              : 'Seleziona un amministratore per generare il report audit delle sue operazioni',
                         ),
                       ],
                     ),

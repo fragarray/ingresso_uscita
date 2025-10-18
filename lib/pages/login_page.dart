@@ -62,8 +62,38 @@ class _LoginPageState extends State<LoginPage> {
             setState(() => _isAutoLoggingIn = false);
           }
         }
+      } on Exception catch (e) {
+        if (mounted) {
+          final errorMessage = e.toString();
+          
+          // Se l'account è stato eliminato, disabilita auto-login e mostra messaggio
+          if (errorMessage.contains('Account non più attivo')) {
+            await prefs.setBool('auto_login', false);
+            setState(() => _isAutoLoggingIn = false);
+            
+            // Mostra messaggio dopo che la UI è pronta
+            Future.delayed(Duration.zero, () {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: const Text(
+                      '🚫 Account Disattivato\n\n'
+                      'Questo account è stato disattivato dall\'amministratore.\n'
+                      'Contatta l\'amministratore per maggiori informazioni.',
+                    ),
+                    backgroundColor: Colors.red[700],
+                    duration: const Duration(seconds: 6),
+                  ),
+                );
+              }
+            });
+          } else {
+            // Altri errori (rete, server), mostra semplicemente la pagina di login
+            setState(() => _isAutoLoggingIn = false);
+          }
+        }
       } catch (e) {
-        // Errore di connessione, mostra la pagina di login
+        // Errore generico di connessione, mostra la pagina di login
         if (mounted) {
           setState(() => _isAutoLoggingIn = false);
         }
@@ -109,6 +139,27 @@ class _LoginPageState extends State<LoginPage> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Credenziali non valide')),
+        );
+      }
+    } on Exception catch (e) {
+      if (!mounted) return;
+      // Controlla se è un account eliminato
+      final errorMessage = e.toString();
+      if (errorMessage.contains('Account non più attivo')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              '🚫 Account Disattivato\n\n'
+              'Questo account è stato disattivato dall\'amministratore.\n'
+              'Contatta l\'amministratore per maggiori informazioni.',
+            ),
+            backgroundColor: Colors.red[700],
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Errore di connessione al server')),
         );
       }
     } catch (e) {
@@ -264,7 +315,7 @@ class _LoginPageState extends State<LoginPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sistema Timbratura'),
+        title: const Text('Sinergy Work'),
       ),
       body: Center(
         child: SingleChildScrollView(

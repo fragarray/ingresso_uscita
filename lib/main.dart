@@ -12,10 +12,12 @@ import 'services/api_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Blocca l'orientamento solo in verticale (portrait)
+  // Consenti tutti gli orientamenti (portrait + landscape)
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
+    DeviceOrientation.landscapeLeft, // Commentare 
+    DeviceOrientation.landscapeRight,
   ]);
   
   runApp(
@@ -130,7 +132,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Sistema Timbratura',
+      title: 'Sinergy Work',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.blue,

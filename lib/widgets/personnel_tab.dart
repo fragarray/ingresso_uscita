@@ -751,7 +751,10 @@ class _PersonnelTabState extends State<PersonnelTab> {
       selectedWorkSite = workSites.first;
     }
     
-    String selectedType = 'in'; // Default a INGRESSO (l'admin può cambiare)
+    // ⚠️ LOGICA INTELLIGENTE: 
+    // - Se dipendente è IN → può forzare OUT o altro IN
+    // - Se dipendente è OUT → può forzare solo IN (mai OUT da solo)
+    String selectedType = currentlyClockedIn ? 'out' : 'in'; // Default intelligente
     final notesController = TextEditingController();
 
     // Variabili per data/ora personalizzate
@@ -803,7 +806,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
                   style: TextStyle(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 8),
-                // Pulsanti per selezionare IN o OUT
+                // Pulsanti per selezionare IN o OUT (con validazione)
                 Row(
                   children: [
                     Expanded(
@@ -854,53 +857,82 @@ class _PersonnelTabState extends State<PersonnelTab> {
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: InkWell(
-                        onTap: () {
-                          setState(() {
-                            selectedType = 'out';
-                          });
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: selectedType == 'out'
-                                ? Colors.red
-                                : Colors.white,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
+                      child: Opacity(
+                        opacity: currentlyClockedIn ? 1.0 : 0.3, // Disabilitato se OUT
+                        child: InkWell(
+                          onTap: currentlyClockedIn ? () {
+                            setState(() {
+                              selectedType = 'out';
+                            });
+                          } : null, // Disabilitato se dipendente è OUT
+                          child: Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
                               color: selectedType == 'out'
                                   ? Colors.red
-                                  : Colors.grey[300]!,
-                              width: selectedType == 'out' ? 3 : 1,
-                            ),
-                          ),
-                          child: Column(
-                            children: [
-                              Icon(
-                                Icons.logout,
+                                  : Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
                                 color: selectedType == 'out'
-                                    ? Colors.white
-                                    : Colors.red,
-                                size: 32,
+                                    ? Colors.red
+                                    : Colors.grey[300]!,
+                                width: selectedType == 'out' ? 3 : 1,
                               ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'USCITA',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
+                            ),
+                            child: Column(
+                              children: [
+                                Icon(
+                                  Icons.logout,
                                   color: selectedType == 'out'
                                       ? Colors.white
-                                      : Colors.red[900],
+                                      : Colors.red,
+                                  size: 32,
                                 ),
-                              ),
-                            ],
+                                const SizedBox(height: 8),
+                                Text(
+                                  'USCITA',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: selectedType == 'out'
+                                        ? Colors.white
+                                        : Colors.red[900],
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ],
                 ),
+                if (!currentlyClockedIn) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info_outline, size: 16, color: Colors.grey[700]),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'USCITA disabilitata: dipendente non è attualmente IN',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey[700],
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 const Text(
                   'Cantiere:',
@@ -1434,80 +1466,892 @@ class _PersonnelTabState extends State<PersonnelTab> {
     final notes = notesController.text.trim();
     notesController.dispose();
 
-    // VALIDAZIONE: Se sto forzando un'uscita e il dipendente è già timbrato in ingresso,
-    // verifico che l'orario di uscita non sia antecedente all'ingresso
-    if (selectedType == 'out' && currentlyClockedIn && useCustomDateTime) {
-      // Prendo l'orario dell'ultimo ingresso
-      final lastInRecord = records.first;
-      final lastInDateTime = lastInRecord.timestamp;
+    // ⚠️ VALIDAZIONE CRITICA: Non posso forzare OUT se dipendente è già OUT
+    if (selectedType == 'out' && !currentlyClockedIn) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '❌ ERRORE: Non puoi forzare un\'uscita!\n\n'
+            'Il dipendente NON risulta attualmente timbrato in ingresso.\n'
+            'Devi prima forzare un ingresso corrispondente.',
+          ),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 5),
+        ),
+      );
+      return;
+    }
 
-      // Confronto con l'orario di uscita selezionato
-      if (customDateTime.isBefore(lastInDateTime)) {
+    // ⚠️ LOGICA DIFFERENZIATA per IN vs OUT
+    if (selectedType == 'out') {
+      // CASO 1: Forzatura USCITA (dipendente attualmente IN)
+      // Validazione: OUT non può essere prima dell'IN esistente
+      if (useCustomDateTime && currentlyClockedIn) {
+        final lastInDateTime = records.first.timestamp;
+        if (customDateTime.isBefore(lastInDateTime)) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '❌ ERRORE: L\'uscita non può essere prima dell\'ingresso!\n\n'
+                'Ingresso: ${lastInDateTime.day.toString().padLeft(2, '0')}/${lastInDateTime.month.toString().padLeft(2, '0')}/${lastInDateTime.year} '
+                'alle ${lastInDateTime.hour.toString().padLeft(2, '0')}:${lastInDateTime.minute.toString().padLeft(2, '0')}\n\n'
+                'Seleziona un orario successivo all\'ingresso.',
+              ),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 6),
+            ),
+          );
+          return;
+        }
+      }
+
+      // Salva solo OUT
+      try {
+        final success = await ApiService.forceAttendance(
+          employeeId: employee.id!,
+          workSiteId: selectedWorkSite!.id!,
+          type: 'out',
+          adminId: admin.id!,
+          notes: notes.isNotEmpty ? notes : null,
+          timestamp: useCustomDateTime ? customDateTime : null,
+        );
+
+        if (!mounted) return;
+
+        if (success) {
+          await Future.delayed(const Duration(milliseconds: 300));
+          if (mounted) {
+            context.read<AppState>().triggerRefresh();
+          }
+          if (_selectedEmployee?.id == employee.id) {
+            await _loadEmployeeAttendance(employee);
+          }
+
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '✅ Uscita forzata per ${employee.name}\n'
+                'Dipendente ora OUT',
+              ),
+              backgroundColor: Colors.green,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Errore durante la timbratura forzata'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Errore: L\'uscita non può essere antecedente all\'ingresso!\n'
-              'Ingresso: ${lastInDateTime.day.toString().padLeft(2, '0')}/${lastInDateTime.month.toString().padLeft(2, '0')}/${lastInDateTime.year} '
-              'alle ${lastInDateTime.hour.toString().padLeft(2, '0')}:${lastInDateTime.minute.toString().padLeft(2, '0')}',
-            ),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 5),
+          SnackBar(content: Text('Errore: $e')),
+        );
+      }
+      return; // Fine gestione OUT
+    }
+
+    // CASO 2: Forzatura INGRESSO
+    
+    // ⚠️ VALIDAZIONE CRITICA: Verifica sovrapposizione timbrature
+    // Controlla se dipendente ha già una timbratura IN nello stesso range orario
+    // IMPORTANTE: Controllo SEMPRE, sia con timestamp custom che corrente!
+    if (selectedType == 'in') {
+      // Carica TUTTE le timbrature del dipendente
+      final allRecords = await ApiService.getAttendanceRecords(
+        employeeId: employee.id!,
+      );
+      
+      // Determina il timestamp da usare (custom o corrente)
+      final forcedDateTime = useCustomDateTime ? customDateTime : DateTime.now();
+      
+      // VALIDAZIONE 1: Cerca timbrature IN nel range +/- 1 ora
+      final rangeStart = forcedDateTime.subtract(const Duration(hours: 1));
+      final rangeEnd = forcedDateTime.add(const Duration(hours: 1));
+      
+      // VALIDAZIONE 2: Controlla OVERLAP con turni esistenti
+      // Ordina i record per timestamp per creare coppie IN/OUT
+      final sortedRecords = List<AttendanceRecord>.from(allRecords);
+      sortedRecords.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      
+      // Cerca coppie IN → OUT e controlla overlap con il nuovo IN forzato
+      for (int i = 0; i < sortedRecords.length - 1; i++) {
+        final current = sortedRecords[i];
+        final next = sortedRecords[i + 1];
+        
+        // Se troviamo una coppia IN → OUT
+        if (current.type == 'in' && next.type == 'out') {
+          final existingInTime = current.timestamp;
+          final existingOutTime = next.timestamp;
+          
+          // CASO 1: Timestamp forzato cade DENTRO turno esistente
+          // Esempio: Esiste 08:00-17:00, forzo IN alle 14:00
+          final isInsideExistingShift = forcedDateTime.isAfter(existingInTime) && 
+                                         forcedDateTime.isBefore(existingOutTime);
+          
+          if (isInsideExistingShift) {
+            // CONFLITTO GRAVE: Stai forzando IN dentro un turno esistente
+            if (!mounted) return;
+            
+            // Trova nomi cantieri
+            String inWorkSiteName = 'N/D';
+            String outWorkSiteName = 'N/D';
+            
+            if (current.workSiteId != null) {
+              try {
+                final ws = workSites.firstWhere((w) => w.id == current.workSiteId);
+                inWorkSiteName = ws.name;
+              } catch (e) {
+                inWorkSiteName = 'Cantiere ID ${current.workSiteId}';
+              }
+            }
+            
+            if (next.workSiteId != null) {
+              try {
+                final ws = workSites.firstWhere((w) => w.id == next.workSiteId);
+                outWorkSiteName = ws.name;
+              } catch (e) {
+                outWorkSiteName = 'Cantiere ID ${next.workSiteId}';
+              }
+            }
+            
+            // Mostra dialog CRITICO
+            await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: Row(
+                  children: [
+                    const Icon(Icons.dangerous, color: Colors.red, size: 32),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'CONFLITTO CRITICO',
+                        style: TextStyle(color: Colors.red, fontSize: 18),
+                      ),
+                    ),
+                  ],
+                ),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.red[100],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red, width: 3),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(Icons.error, color: Colors.red, size: 24),
+                                SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '⚠️ SOVRAPPOSIZIONE TURNO',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.red,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Il dipendente ${employee.name} era GIÀ IN SERVIZIO in quel momento!\n\nIl timestamp forzato cade DENTRO un turno esistente.',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    '🕐 Turno Esistente:',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.login, color: Colors.green, size: 20),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'IN: ${DateFormat('dd/MM/yyyy HH:mm').format(existingInTime.toLocal())}',
+                                              style: const TextStyle(fontSize: 12),
+                                            ),
+                                            Text(
+                                              'Cantiere: $inWorkSiteName',
+                                              style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.logout, color: Colors.red, size: 20),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'OUT: ${DateFormat('dd/MM/yyyy HH:mm').format(existingOutTime.toLocal())}',
+                                              style: const TextStyle(fontSize: 12),
+                                            ),
+                                            Text(
+                                              'Cantiere: $outWorkSiteName',
+                                              style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.orange[100],
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.orange, width: 2),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    '🚫 Timestamp che stai tentando:',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                      color: Colors.orange,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'IN: ${DateFormat('dd/MM/yyyy HH:mm').format(forcedDateTime.toLocal())}',
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  const Text(
+                                    '↑ Questo timestamp cade DENTRO il turno esistente!',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Colors.orange,
+                                      fontStyle: FontStyle.italic,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue[50],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.info, color: Colors.blue, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Un dipendente non può avere due turni sovrapposti.\n\n'
+                                'Se devi modificare il turno esistente, usa "Modifica" tenendo premuto sull\'elemento nello storico.',
+                                style: TextStyle(fontSize: 12, color: Colors.blue[900]),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    ),
+                    child: const Text('HO CAPITO', style: TextStyle(fontSize: 14)),
+                  ),
+                ],
+              ),
+            );
+            
+            // Blocca SEMPRE l'operazione
+            return;
+          }
+        }
+      }
+      
+      // Se arriviamo qui, controlliamo anche IN singoli vicini
+      for (final record in allRecords) {
+        if (record.type == 'in') {
+          final recordTime = record.timestamp;
+          // Controlla se c'è sovrapposizione nel range ±1 ora
+          if (recordTime.isAfter(rangeStart) && recordTime.isBefore(rangeEnd)) {
+            // CONFLITTO TROVATO!
+            if (!mounted) return;
+            
+            // Trova il nome del cantiere del record esistente
+            String existingWorkSiteName = 'N/D';
+            if (record.workSiteId != null) {
+              try {
+                final ws = workSites.firstWhere((w) => w.id == record.workSiteId);
+                existingWorkSiteName = ws.name;
+              } catch (e) {
+                existingWorkSiteName = 'Cantiere ID ${record.workSiteId}';
+              }
+            }
+            
+            // Mostra dialog con dettagli conflitto
+            await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: Row(
+                  children: [
+                    const Icon(Icons.error, color: Colors.red, size: 28),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'CONFLITTO TIMBRATURA',
+                        style: TextStyle(color: Colors.red),
+                      ),
+                    ),
+                  ],
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.red, width: 2),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            '⚠️ OPERAZIONE NON CONSENTITA',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.red,
+                              fontSize: 15,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Il dipendente ${employee.name} ha già una timbratura IN nello stesso range orario!',
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                          const SizedBox(height: 12),
+                          const Divider(),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Timbratura Esistente:',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Data: ${recordTime.day.toString().padLeft(2, '0')}/${recordTime.month.toString().padLeft(2, '0')}/${recordTime.year}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          Text(
+                            'Ora IN: ${recordTime.hour.toString().padLeft(2, '0')}:${recordTime.minute.toString().padLeft(2, '0')}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          Text(
+                            'Cantiere: $existingWorkSiteName',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          const SizedBox(height: 12),
+                          const Divider(),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Timbratura che stai tentando:',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Data: ${forcedDateTime.day.toString().padLeft(2, '0')}/${forcedDateTime.month.toString().padLeft(2, '0')}/${forcedDateTime.year}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          Text(
+                            'Ora IN: ${forcedDateTime.hour.toString().padLeft(2, '0')}:${forcedDateTime.minute.toString().padLeft(2, '0')}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          Text(
+                            'Cantiere: ${selectedWorkSite?.name ?? 'N/D'}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue[50],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.info, color: Colors.blue, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Un dipendente non può essere in due luoghi contemporaneamente.\n\n'
+                              'Se vuoi modificare la timbratura esistente, tieni premuto sull\'elemento nello storico.',
+                              style: TextStyle(fontSize: 12, color: Colors.blue[900]),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('HO CAPITO'),
+                  ),
+                ],
+              ),
+            );
+            
+            // Blocca sempre l'operazione
+            return;
+          }
+        }
+      }
+    }
+    
+    DateTime? outDateTime;
+    String? outNotes;
+
+    final now = DateTime.now();
+    DateTime forcedDateTime;
+    
+    if (useCustomDateTime) {
+      forcedDateTime = customDateTime;
+    } else {
+      forcedDateTime = now;
+    }
+
+    // Calcola le ore trascorse dall'ingresso forzato a ORA
+    final hoursSinceIn = now.difference(forcedDateTime).inHours;
+
+    // REGOLA: Se sono passate più di 8 ore, OBBLIGATORIO forzare anche OUT
+    final mustForceOut = hoursSinceIn >= 8;
+
+    if (mustForceOut && selectedType == 'in') {
+      if (!mounted) return;
+
+      // Mostra dialog che RICHIEDE di inserire anche l'OUT
+      final shouldAddOut = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false, // Non può chiudere senza scegliere
+        builder: (context) => _buildRequireOutDialog(
+          context,
+          employee,
+          selectedWorkSite!,
+          forcedDateTime,
+        ),
+      );
+
+      if (shouldAddOut != true) {
+        // L'admin ha annullato, non salvare nulla
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Operazione annullata: timbratura non salvata'),
+            backgroundColor: Colors.orange,
           ),
         );
         return;
       }
-    }
 
-    // PRIMA: Se è un IN forzato con data diversa da oggi, chiedi se vuole aggiungere anche OUT
-    DateTime? outDateTime;
-    String? outNotes;
-
-    if (selectedType == 'in' && useCustomDateTime) {
-      final forcedDate = DateTime(
-        customDateTime.year,
-        customDateTime.month,
-        customDateTime.day,
+      // Raccogli dati dell'uscita OBBLIGATORIA
+      if (!mounted) return;
+      final outData = await _collectOutData(
+        employee,
+        selectedWorkSite!,
+        forcedDateTime,
       );
-      final today = DateTime.now();
-      final todayDate = DateTime(today.year, today.month, today.day);
-
-      // Se la data forzata è diversa da oggi, suggerisci OUT
-      if (!forcedDate.isAtSameMomentAs(todayDate)) {
+      
+      if (outData == null) {
+        // L'admin ha annullato, non salvare nulla
         if (!mounted) return;
-
-        final shouldAddOut = await showDialog<bool>(
-          context: context,
-          builder: (context) => _buildSuggestOutDialog(
-            context,
-            employee,
-            selectedWorkSite!,
-            customDateTime,
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Operazione annullata: timbratura non salvata'),
+            backgroundColor: Colors.orange,
           ),
         );
+        return;
+      }
 
-        if (shouldAddOut == true && mounted) {
-          // Mostra dialog per selezionare l'ora di uscita e raccogli i dati
-          final outData = await _collectOutData(
-            employee,
-            selectedWorkSite!,
-            customDateTime,
-          );
-          if (outData != null) {
-            outDateTime = outData['dateTime'] as DateTime;
-            outNotes = outData['notes'] as String?;
+      outDateTime = outData['dateTime'] as DateTime;
+      outNotes = outData['notes'] as String?;
+      
+      // ⚠️ VALIDAZIONE OVERLAP TURNO COMPLETO
+      // Ora che abbiamo sia IN che OUT, verifichiamo che non si sovrappongano
+      // con turni esistenti
+      if (!mounted) return;
+      
+      // Ricarica i record per avere dati aggiornati
+      final allRecords = await ApiService.getAttendanceRecords(
+        employeeId: employee.id!,
+      );
+      
+      final sortedRecords = List<AttendanceRecord>.from(allRecords);
+      sortedRecords.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      
+      // Controlla overlap con turni esistenti
+      for (int i = 0; i < sortedRecords.length - 1; i++) {
+        final current = sortedRecords[i];
+        final next = sortedRecords[i + 1];
+        
+        if (current.type == 'in' && next.type == 'out') {
+          final existingInTime = current.timestamp;
+          final existingOutTime = next.timestamp;
+          
+          // Controlla 4 casi di overlap:
+          // 1. Nuovo IN dentro turno esistente
+          final newInInsideExisting = forcedDateTime.isAfter(existingInTime) && 
+                                       forcedDateTime.isBefore(existingOutTime);
+          
+          // 2. Nuovo OUT dentro turno esistente
+          final newOutInsideExisting = outDateTime.isAfter(existingInTime) && 
+                                        outDateTime.isBefore(existingOutTime);
+          
+          // 3. Turno esistente completamente dentro nuovo turno
+          final existingInsideNew = existingInTime.isAfter(forcedDateTime) && 
+                                    existingOutTime.isBefore(outDateTime);
+          
+          // 4. Qualsiasi intersezione tra gli intervalli
+          final hasOverlap = (forcedDateTime.isBefore(existingOutTime) && 
+                              outDateTime.isAfter(existingInTime));
+          
+          if (hasOverlap) {
+            if (!mounted) return;
+            
+            // Trova nomi cantieri per dialog
+            String existingInWorkSite = 'N/D';
+            String existingOutWorkSite = 'N/D';
+            
+            if (current.workSiteId != null) {
+              try {
+                final ws = workSites.firstWhere((w) => w.id == current.workSiteId);
+                existingInWorkSite = ws.name;
+              } catch (e) {
+                existingInWorkSite = 'Cantiere ID ${current.workSiteId}';
+              }
+            }
+            
+            if (next.workSiteId != null) {
+              try {
+                final ws = workSites.firstWhere((w) => w.id == next.workSiteId);
+                existingOutWorkSite = ws.name;
+              } catch (e) {
+                existingOutWorkSite = 'Cantiere ID ${next.workSiteId}';
+              }
+            }
+            
+            // Determina tipo di overlap per messaggio
+            String overlapType;
+            if (newInInsideExisting && newOutInsideExisting) {
+              overlapType = 'Il nuovo turno è completamente DENTRO un turno esistente!';
+            } else if (existingInsideNew) {
+              overlapType = 'Il nuovo turno CONTIENE completamente un turno esistente!';
+            } else if (newInInsideExisting) {
+              overlapType = 'Il nuovo IN cade dentro un turno esistente!';
+            } else if (newOutInsideExisting) {
+              overlapType = 'Il nuovo OUT cade dentro un turno esistente!';
+            } else {
+              overlapType = 'I due turni si sovrappongono parzialmente!';
+            }
+            
+            // Dialog CRITICO di overlap
+            await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: Row(
+                  children: [
+                    const Icon(Icons.dangerous, color: Colors.red, size: 32),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'OVERLAP TURNI',
+                        style: TextStyle(color: Colors.red, fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.red[100],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.red, width: 3),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.error, color: Colors.red, size: 32),
+                            const SizedBox(height: 12),
+                            Text(
+                              overlapType,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.red,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              '🕐 Turno Esistente:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.login, color: Colors.green, size: 18),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'IN: ${DateFormat('dd/MM/yyyy HH:mm').format(existingInTime.toLocal())}',
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Text(
+                                    '   Cantiere: $existingInWorkSite',
+                                    style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.logout, color: Colors.red, size: 18),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'OUT: ${DateFormat('dd/MM/yyyy HH:mm').format(existingOutTime.toLocal())}',
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Text(
+                                    '   Cantiere: $existingOutWorkSite',
+                                    style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              '🚫 Nuovo Turno Tentato:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: Colors.red,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.orange[50],
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.orange, width: 2),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.login, color: Colors.green, size: 18),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'IN: ${DateFormat('dd/MM/yyyy HH:mm').format(forcedDateTime.toLocal())}',
+                                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Text(
+                                    '   Cantiere: ${selectedWorkSite!.name}',
+                                    style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.logout, color: Colors.red, size: 18),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'OUT: ${DateFormat('dd/MM/yyyy HH:mm').format(outDateTime!.toLocal())}',
+                                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Text(
+                                    '   Cantiere: ${selectedWorkSite!.name}',
+                                    style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.yellow[100],
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.orange, width: 2),
+                              ),
+                              child: const Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(Icons.info, color: Colors.orange, size: 20),
+                                      SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'Un dipendente non può avere turni sovrapposti',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  SizedBox(height: 8),
+                                  Text(
+                                    'Per correggere i dati:\n'
+                                    '• Usa "Modifica" per cambiare turno esistente\n'
+                                    '• Oppure elimina il turno esistente prima',
+                                    style: TextStyle(fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: TextButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    ),
+                    child: const Text('HO CAPITO', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            );
+            
+            // Blocca l'operazione
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Operazione annullata: overlap tra turni rilevato'),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 4),
+              ),
+            );
+            return;
           }
         }
       }
     }
 
-    // DOPO: Ora salva tutto in ordine (prima IN, poi OUT se presente)
+    // SALVATAGGIO ATOMICO: Salva prima IN, poi OUT (se presente)
     try {
       // 1. Salva IN
       final inSuccess = await ApiService.forceAttendance(
         employeeId: employee.id!,
         workSiteId: selectedWorkSite!.id!,
-        type: selectedType,
+        type: 'in',
         adminId: admin.id!,
         notes: notes.isNotEmpty ? notes : null,
         timestamp: useCustomDateTime ? customDateTime : null,
@@ -1525,7 +2369,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
         return;
       }
 
-      // 2. Se c'è OUT da aggiungere, salvalo
+      // 2. Se c'è OUT da aggiungere, salvalo SUBITO
       if (outDateTime != null) {
         final outSuccess = await ApiService.forceAttendance(
           employeeId: employee.id!,
@@ -1540,15 +2384,12 @@ class _PersonnelTabState extends State<PersonnelTab> {
 
         if (outSuccess) {
           // Entrambe salvate con successo
-          // Aggiungi delay per consistenza database
           await Future.delayed(const Duration(milliseconds: 300));
           
-          // Trigger refresh generale per aggiornare tutti i dati
           if (mounted) {
             context.read<AppState>().triggerRefresh();
           }
           
-          // Ricarica solo lo storico del dipendente selezionato
           if (_selectedEmployee?.id == employee.id) {
             await _loadEmployeeAttendance(employee);
           }
@@ -1558,8 +2399,8 @@ class _PersonnelTabState extends State<PersonnelTab> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                'Ingresso e uscita forzati per ${employee.name}\n'
-                'IN: ${customDateTime.hour.toString().padLeft(2, '0')}:${customDateTime.minute.toString().padLeft(2, '0')} - '
+                '✅ Coppia IN/OUT forzata per ${employee.name}\n'
+                'IN: ${forcedDateTime.hour.toString().padLeft(2, '0')}:${forcedDateTime.minute.toString().padLeft(2, '0')} - '
                 'OUT: ${outDateTime.hour.toString().padLeft(2, '0')}:${outDateTime.minute.toString().padLeft(2, '0')}',
               ),
               backgroundColor: Colors.green,
@@ -1567,43 +2408,26 @@ class _PersonnelTabState extends State<PersonnelTab> {
             ),
           );
         } else {
-          // IN salvato ma OUT fallito
-          // Aggiungi delay per consistenza database
-          await Future.delayed(const Duration(milliseconds: 300));
-          
-          // Trigger refresh generale per aggiornare tutti i dati
-          if (mounted) {
-            context.read<AppState>().triggerRefresh();
-          }
-          
-          // Ricarica solo lo storico del dipendente selezionato
-          if (_selectedEmployee?.id == employee.id) {
-            await _loadEmployeeAttendance(employee);
-          }
-
-          if (!mounted) return;
-
+          // ❌ CRITICO: IN salvato ma OUT fallito - dati inconsistenti!
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                'Ingresso forzato salvato, ma errore durante uscita per ${employee.name}',
+                '⚠️ ERRORE CRITICO: Ingresso salvato ma uscita fallita!\n'
+                'Controllare manualmente il dipendente ${employee.name}',
               ),
-              backgroundColor: Colors.orange,
-              duration: const Duration(seconds: 4),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 8),
             ),
           );
         }
       } else {
-        // Solo IN salvato
-        // Aggiungi delay per consistenza database
+        // Solo IN salvato (timbratura recente < 8 ore)
         await Future.delayed(const Duration(milliseconds: 300));
         
-        // Trigger refresh generale per aggiornare tutti i dati
         if (mounted) {
           context.read<AppState>().triggerRefresh();
-        }
+          }
         
-        // Ricarica solo lo storico del dipendente selezionato
         if (_selectedEmployee?.id == employee.id) {
           await _loadEmployeeAttendance(employee);
         }
@@ -1613,8 +2437,8 @@ class _PersonnelTabState extends State<PersonnelTab> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Timbratura ${selectedType == 'in' ? 'ingresso' : 'uscita'} '
-              'forzata per ${employee.name}',
+              '✅ Ingresso forzato per ${employee.name}\n'
+              'Dipendente attualmente IN',
             ),
             backgroundColor: Colors.green,
           ),
@@ -1628,18 +2452,22 @@ class _PersonnelTabState extends State<PersonnelTab> {
     }
   }
 
-  Widget _buildSuggestOutDialog(
+  // Dialog che OBBLIGA ad aggiungere OUT (>8 ore fa)
+  Widget _buildRequireOutDialog(
     BuildContext context,
     Employee employee,
     WorkSite workSite,
     DateTime inDateTime,
   ) {
+    final now = DateTime.now();
+    final hoursSince = now.difference(inDateTime).inHours;
+    
     return AlertDialog(
       title: Row(
         children: [
-          const Icon(Icons.help_outline, color: Colors.blue),
+          const Icon(Icons.error, color: Colors.red),
           const SizedBox(width: 8),
-          const Expanded(child: Text('Aggiungi Uscita?')),
+          const Expanded(child: Text('Uscita Obbligatoria')),
         ],
       ),
       content: Column(
@@ -1649,9 +2477,51 @@ class _PersonnelTabState extends State<PersonnelTab> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
+              color: Colors.red[50],
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.red, width: 2),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.warning, color: Colors.red, size: 24),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'REGOLA OBBLIGATORIA',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Stai forzando un ingresso di più di 8 ore fa ($hoursSince ore).',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Per mantenere la coerenza dei dati, DEVI forzare anche l\'uscita.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
               color: Colors.blue[50],
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.blue[200]!, width: 1),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1660,58 +2530,25 @@ class _PersonnelTabState extends State<PersonnelTab> {
                   children: [
                     const Icon(Icons.info, color: Colors.blue, size: 20),
                     const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'Ingresso Forzato',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue,
-                        ),
+                    const Text(
+                      'Ingresso Forzato',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue,
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  'Dipendente: ${employee.name}',
-                  style: const TextStyle(fontSize: 13),
-                ),
-                Text(
-                  'Cantiere: ${workSite.name}',
-                  style: const TextStyle(fontSize: 13),
-                ),
+                Text('Dipendente: ${employee.name}', style: const TextStyle(fontSize: 13)),
+                Text('Cantiere: ${workSite.name}', style: const TextStyle(fontSize: 13)),
                 Text(
                   'Data: ${inDateTime.day.toString().padLeft(2, '0')}/${inDateTime.month.toString().padLeft(2, '0')}/${inDateTime.year}',
                   style: const TextStyle(fontSize: 13),
                 ),
                 Text(
-                  'Ora Ingresso: ${inDateTime.hour.toString().padLeft(2, '0')}:${inDateTime.minute.toString().padLeft(2, '0')}',
-                  style: const TextStyle(fontSize: 13),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Hai forzato un ingresso per una data diversa da oggi.',
-            style: TextStyle(fontSize: 14),
-          ),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.orange[50],
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.warning, color: Colors.orange, size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Vuoi aggiungere anche la timbratura di uscita per evitare conteggi errati delle ore?',
-                    style: TextStyle(fontSize: 13, color: Colors.orange[900]),
-                  ),
+                  'Ora IN: ${inDateTime.hour.toString().padLeft(2, '0')}:${inDateTime.minute.toString().padLeft(2, '0')}',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -1721,20 +2558,21 @@ class _PersonnelTabState extends State<PersonnelTab> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),
-          child: const Text('NO, SOLO INGRESSO'),
+          child: const Text('ANNULLA TUTTO'),
         ),
         ElevatedButton(
           onPressed: () => Navigator.pop(context, true),
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.blue,
+            backgroundColor: Colors.red,
             foregroundColor: Colors.white,
           ),
-          child: const Text('SÌ, AGGIUNGI USCITA'),
+          child: const Text('OK, AGGIUNGI USCITA'),
         ),
       ],
     );
   }
 
+  // Dialog suggerimento OUT (manteniamo per compatibilità, ma non più usato)
   /// Raccoglie i dati per l'uscita senza salvarli nel database
   /// Restituisce una mappa con 'dateTime' e 'notes' oppure null se annullato
   Future<Map<String, dynamic>?> _collectOutData(
@@ -2822,7 +3660,9 @@ class _PersonnelTabState extends State<PersonnelTab> {
     final outDate = DateFormat('dd/MM/yyyy').format(outRecord.timestamp.toLocal());
     final isDifferentDay = inDate != outDate;
     
-    return Container(
+    return GestureDetector(
+      onLongPress: () => _showEditAttendanceMenu(inRecord, outRecord),
+      child: Container(
       margin: const EdgeInsets.only(bottom: 6), // Ridotto da 8 a 6
       decoration: BoxDecoration(
         gradient: LinearGradient(
@@ -3031,6 +3871,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
           ),
         ],
       ),
+      ),
     );
   }
 
@@ -3204,7 +4045,9 @@ class _PersonnelTabState extends State<PersonnelTab> {
       orElse: () => WorkSite(id: 0, name: 'Sconosciuto', address: '', latitude: 0, longitude: 0),
     );
 
-    return Container(
+    return GestureDetector(
+      onLongPress: () => _showEditAttendanceMenu(record, null),
+      child: Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
         color: isForced
@@ -3364,7 +4207,599 @@ class _PersonnelTabState extends State<PersonnelTab> {
           ],
         ),
       ),
+      ),
     );
+  }
+
+  // Mostra menu di modifica/cancellazione per timbratura
+  void _showEditAttendanceMenu(AttendanceRecord inRecord, AttendanceRecord? outRecord) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.edit, color: Colors.blue),
+            const SizedBox(width: 8),
+            const Text('Modifica Timbratura'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Dipendente: ${_selectedEmployee!.name}',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Data: ${DateFormat('dd/MM/yyyy').format(inRecord.timestamp.toLocal())}',
+              style: TextStyle(color: Colors.grey[700]),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Cosa vuoi fare?',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _editAttendance(inRecord, outRecord);
+            },
+            icon: const Icon(Icons.edit, size: 20),
+            label: const Text('Modifica'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.blue,
+            ),
+          ),
+          TextButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _deleteAttendance(inRecord, outRecord);
+            },
+            icon: const Icon(Icons.delete, size: 20),
+            label: const Text('Elimina'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.red,
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annulla'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Modifica timbratura esistente
+  Future<void> _editAttendance(AttendanceRecord inRecord, AttendanceRecord? outRecord) async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => _EditAttendanceDialog(
+        inRecord: inRecord,
+        outRecord: outRecord,
+        workSites: _workSites,
+        employeeName: _selectedEmployee!.name,
+      ),
+    );
+
+    if (result == null) return; // Annullato
+
+    // Mostra loading
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('Modifica in corso...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // Ottieni admin ID
+    final adminId = context.read<AppState>().currentEmployee?.id;
+    if (adminId == null) {
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('❌ Errore: Admin non identificato'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    bool allSuccess = true;
+
+    // Modifica IN se ci sono cambiamenti
+    if (result['editIn'] == true) {
+      final success = await ApiService.editAttendance(
+        recordId: inRecord.id!,
+        adminId: adminId,
+        timestamp: result['inTimestamp'],
+        workSiteId: result['inWorkSiteId'],
+      );
+      if (!success) allSuccess = false;
+    }
+
+    // Modifica OUT se esiste e ci sono cambiamenti
+    if (outRecord != null && result['editOut'] == true) {
+      final success = await ApiService.editAttendance(
+        recordId: outRecord.id!,
+        adminId: adminId,
+        timestamp: result['outTimestamp'],
+        workSiteId: result['outWorkSiteId'],
+      );
+      if (!success) allSuccess = false;
+    }
+
+    // Chiudi loading
+    if (!mounted) return;
+    Navigator.of(context).pop();
+
+    if (allSuccess) {
+      // Ricarica i dati
+      _loadEmployees();
+      if (_selectedEmployee != null) {
+        await _loadEmployeeAttendance(_selectedEmployee!);
+      }
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ Timbratura modificata con successo'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('❌ Errore durante la modifica'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
+  // Elimina timbratura esistente
+  Future<void> _deleteAttendance(AttendanceRecord inRecord, AttendanceRecord? outRecord) async {
+    // Conferma cancellazione
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Conferma Eliminazione'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Sei sicuro di voler eliminare questa timbratura?',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red[50],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.red[200]!),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Dipendente: ${_selectedEmployee!.name}',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'IN: ${DateFormat('dd/MM/yyyy HH:mm').format(inRecord.timestamp.toLocal())}',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  if (outRecord != null)
+                    Text(
+                      'OUT: ${DateFormat('dd/MM/yyyy HH:mm').format(outRecord.timestamp.toLocal())}',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '⚠️ Questa azione è irreversibile!',
+              style: TextStyle(
+                color: Colors.red,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Annulla'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Elimina'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    // Mostra loading
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('Eliminazione in corso...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // Chiama API per eliminare
+    final adminId = context.read<AppState>().currentEmployee?.id;
+    if (adminId == null) {
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('❌ Errore: Admin non identificato'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
+    final success = await ApiService.deleteAttendance(
+      recordId: inRecord.id!,
+      adminId: adminId,
+      deleteOutToo: outRecord != null, // Se c'è OUT, elimina anche quello
+    );
+
+    // Chiudi loading
+    if (!mounted) return;
+    Navigator.of(context).pop();
+
+    if (success) {
+      // Ricarica i dati
+      _loadEmployees();
+      if (_selectedEmployee != null) {
+        await _loadEmployeeAttendance(_selectedEmployee!);
+      }
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ Timbratura eliminata con successo'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('❌ Errore durante l\'eliminazione'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 4),
+        ),
+      );
+    }
   }
 }
 
+// Dialog per modificare una timbratura esistente
+class _EditAttendanceDialog extends StatefulWidget {
+  final AttendanceRecord inRecord;
+  final AttendanceRecord? outRecord;
+  final List<WorkSite> workSites;
+  final String employeeName;
+
+  const _EditAttendanceDialog({
+    required this.inRecord,
+    required this.outRecord,
+    required this.workSites,
+    required this.employeeName,
+  });
+
+  @override
+  State<_EditAttendanceDialog> createState() => _EditAttendanceDialogState();
+}
+
+class _EditAttendanceDialogState extends State<_EditAttendanceDialog> {
+  late DateTime _inDateTime;
+  late DateTime? _outDateTime;
+  late int _inWorkSiteId;
+  late int? _outWorkSiteId;
+
+  @override
+  void initState() {
+    super.initState();
+    _inDateTime = widget.inRecord.timestamp.toLocal();
+    _outDateTime = widget.outRecord?.timestamp.toLocal();
+    _inWorkSiteId = widget.inRecord.workSiteId!;
+    _outWorkSiteId = widget.outRecord?.workSiteId;
+  }
+
+  Future<void> _selectDateTime(bool isIn) async {
+    final currentDateTime = isIn ? _inDateTime : _outDateTime!;
+    
+    // Seleziona data
+    final date = await showDatePicker(
+      context: context,
+      initialDate: currentDateTime,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+    );
+    
+    if (date == null) return;
+    
+    // Seleziona ora
+    if (!mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(currentDateTime),
+    );
+    
+    if (time == null) return;
+    
+    // Combina data e ora
+    final newDateTime = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
+    
+    setState(() {
+      if (isIn) {
+        _inDateTime = newDateTime;
+      } else {
+        _outDateTime = newDateTime;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Icon(Icons.edit, color: Colors.blue),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Modifica Timbratura',
+              style: const TextStyle(fontSize: 18),
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: 500,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Dipendente: ${widget.employeeName}',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              const SizedBox(height: 16),
+              const Divider(),
+              
+              // INGRESSO
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.green,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.login, color: Colors.white, size: 20),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'INGRESSO',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              
+              // Data/Ora IN
+              InkWell(
+                onTap: () => _selectDateTime(true),
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Data e Ora',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.calendar_today),
+                  ),
+                  child: Text(
+                    DateFormat('dd/MM/yyyy HH:mm').format(_inDateTime),
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              
+              // Cantiere IN
+              DropdownButtonFormField<int>(
+                value: _inWorkSiteId,
+                decoration: const InputDecoration(
+                  labelText: 'Cantiere',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.location_on),
+                ),
+                items: widget.workSites.map((ws) {
+                  return DropdownMenuItem(
+                    value: ws.id,
+                    child: Text(ws.name, style: const TextStyle(fontSize: 14)),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() => _inWorkSiteId = value);
+                  }
+                },
+              ),
+              
+              // USCITA (se esiste)
+              if (widget.outRecord != null) ...[
+                const SizedBox(height: 16),
+                const Divider(),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.logout, color: Colors.white, size: 20),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'USCITA',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                
+                // Data/Ora OUT
+                InkWell(
+                  onTap: () => _selectDateTime(false),
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Data e Ora',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.calendar_today),
+                    ),
+                    child: Text(
+                      DateFormat('dd/MM/yyyy HH:mm').format(_outDateTime!),
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                
+                // Cantiere OUT
+                DropdownButtonFormField<int>(
+                  value: _outWorkSiteId,
+                  decoration: const InputDecoration(
+                    labelText: 'Cantiere',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.location_on),
+                  ),
+                  items: widget.workSites.map((ws) {
+                    return DropdownMenuItem(
+                      value: ws.id,
+                      child: Text(ws.name, style: const TextStyle(fontSize: 14)),
+                    );
+                  }).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() => _outWorkSiteId = value);
+                    }
+                  },
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Annulla'),
+        ),
+        ElevatedButton.icon(
+          onPressed: () {
+            // Valida che OUT sia dopo IN
+            if (_outDateTime != null && _outDateTime!.isBefore(_inDateTime)) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('❌ L\'uscita deve essere successiva all\'ingresso'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+              return;
+            }
+            
+            // Crea risultato con i cambiamenti
+            final result = {
+              'editIn': _inDateTime != widget.inRecord.timestamp.toLocal() ||
+                        _inWorkSiteId != widget.inRecord.workSiteId,
+              'inTimestamp': _inDateTime,
+              'inWorkSiteId': _inWorkSiteId,
+              
+              if (widget.outRecord != null) 'editOut': 
+                  _outDateTime != widget.outRecord!.timestamp.toLocal() ||
+                  _outWorkSiteId != widget.outRecord!.workSiteId,
+              if (widget.outRecord != null) 'outTimestamp': _outDateTime,
+              if (widget.outRecord != null) 'outWorkSiteId': _outWorkSiteId,
+            };
+            
+            Navigator.of(context).pop(result);
+          },
+          icon: const Icon(Icons.save),
+          label: const Text('Salva'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blue,
+            foregroundColor: Colors.white,
+          ),
+        ),
+      ],
+    );
+  }
+}

@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "ingresso_uscita" "\0"
+            VALUE "CompanyName", "FragArray" "\0"
+            VALUE "FileDescription", "Sinergy Work" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "ingresso_uscita" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2025 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "ingresso_uscita.exe" "\0"
-            VALUE "ProductName", "ingresso_uscita" "\0"
+            VALUE "InternalName", "Sinergy Work" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2025 FragArray. All rights reserved." "\0"
+            VALUE "OriginalFilename", "sinergy_work.exe" "\0"
+            VALUE "ProductName", "Sinergy Work" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
