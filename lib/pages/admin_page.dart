@@ -324,7 +324,9 @@ class _SettingsTabState extends State<SettingsTab> {
   
   // Server IP
   final TextEditingController _serverIpController = TextEditingController();
+  final TextEditingController _serverPortController = TextEditingController();
   String _currentServerIp = '192.168.1.2';
+  int _currentServerPort = 3000;
   bool _testingConnection = false;
 
   @override
@@ -339,25 +341,42 @@ class _SettingsTabState extends State<SettingsTab> {
   @override
   void dispose() {
     _serverIpController.dispose();
+    _serverPortController.dispose();
     super.dispose();
   }
   
   Future<void> _loadServerIp() async {
     final prefs = await SharedPreferences.getInstance();
     final savedIp = prefs.getString('serverIp') ?? '192.168.1.2';
+    final savedPort = prefs.getInt('serverPort') ?? 3000;
     setState(() {
       _currentServerIp = savedIp;
+      _currentServerPort = savedPort;
       _serverIpController.text = savedIp;
+      _serverPortController.text = savedPort.toString();
     });
   }
 
   Future<void> _testAndSaveServerIp() async {
     final newIp = _serverIpController.text.trim();
+    final portText = _serverPortController.text.trim();
     
     if (newIp.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Inserisci un indirizzo IP valido'),
+          content: Text('Inserisci un indirizzo server valido'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    
+    // Valida porta
+    final newPort = int.tryParse(portText);
+    if (newPort == null || newPort < 1 || newPort > 65535) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Porta non valida (deve essere tra 1 e 65535)'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -368,18 +387,20 @@ class _SettingsTabState extends State<SettingsTab> {
       _testingConnection = true;
     });
     
-    // Test connessione
-    final result = await ApiService.pingServer(newIp);
+    // Test connessione con porta specificata
+    final result = await ApiService.pingServer(newIp, newPort);
     
     setState(() {
       _testingConnection = false;
     });
     
     if (result['success'] == true) {
-      // Server valido, salva l'IP
+      // Server valido, salva IP e porta
       await ApiService.setServerIp(newIp);
+      await ApiService.setServerPort(newPort);
       setState(() {
         _currentServerIp = newIp;
+        _currentServerPort = newPort;
       });
       
       if (!mounted) return;
@@ -402,7 +423,7 @@ class _SettingsTabState extends State<SettingsTab> {
               Text('Versione: ${result['version']}', style: const TextStyle(fontSize: 12)),
               const SizedBox(height: 8),
               const Text(
-                'L\'indirizzo IP del server è stato aggiornato.',
+                'L\'indirizzo del server è stato aggiornato.',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             ],
@@ -828,43 +849,67 @@ class _SettingsTabState extends State<SettingsTab> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Configura l\'indirizzo IP del server. Il test di connessione verificherà che sia raggiungibile.',
+                  'Configura l\'indirizzo del server (IP locale, IP pubblico o nome dominio DynDNS) e la porta. Il test di connessione verificherà che sia raggiungibile.',
                   style: TextStyle(color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 24),
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(
+                      flex: 3,
                       child: TextField(
                         controller: _serverIpController,
-                        decoration: InputDecoration(
-                          labelText: 'Indirizzo IP',
-                          hintText: '192.168.1.2',
-                          border: const OutlineInputBorder(),
-                          prefixIcon: const Icon(Icons.computer),
-                          suffixText: ':3000',
+                        decoration: const InputDecoration(
+                          labelText: 'Indirizzo Server',
+                          hintText: 'es: 192.168.1.2 o example.ddns.net',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.dns),
+                          helperText: 'IP o nome dominio',
                         ),
-                        keyboardType: TextInputType.numberWithOptions(decimal: true),
+                        keyboardType: TextInputType.text,
+                        autocorrect: false,
                       ),
                     ),
                     const SizedBox(width: 12),
-                    ElevatedButton.icon(
-                      onPressed: _testingConnection ? null : _testAndSaveServerIp,
-                      icon: _testingConnection
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.check_circle),
-                      label: Text(_testingConnection ? 'Test...' : 'Testa e Salva'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.purple,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+                    Expanded(
+                      flex: 1,
+                      child: TextField(
+                        controller: _serverPortController,
+                        decoration: const InputDecoration(
+                          labelText: 'Porta',
+                          hintText: '3000',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.power),
+                          helperText: ' ', // Spazio per allineamento
+                        ),
+                        keyboardType: TextInputType.number,
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _testingConnection ? null : _testAndSaveServerIp,
+                    icon: _testingConnection
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                            ),
+                          )
+                        : const Icon(Icons.check_circle),
+                    label: Text(_testingConnection ? 'Test in corso...' : 'Testa e Salva Configurazione'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.purple,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Container(
@@ -880,7 +925,7 @@ class _SettingsTabState extends State<SettingsTab> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'IP corrente: $_currentServerIp:3000',
+                          'Server corrente: $_currentServerIp:$_currentServerPort',
                           style: TextStyle(
                             fontSize: 13,
                             color: Colors.purple[900],
