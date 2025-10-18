@@ -27,6 +27,27 @@ const worksitesRoutes = require('./routes/worksites');
 app.use(cors());
 app.use(express.json());
 
+// ==================== LOGGING MIDDLEWARE ====================
+// Middleware per log di tutte le richieste HTTP (DOPO express.json())
+app.use((req, res, next) => {
+  const timestamp = new Date().toLocaleString('it-IT');
+  console.log(`\n📡 [${timestamp}] ${req.method} ${req.originalUrl}`);
+  
+  // Log body per POST/PUT (escludi password per sicurezza)
+  if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body && Object.keys(req.body).length > 0) {
+    const sanitizedBody = { ...req.body };
+    if (sanitizedBody.password) sanitizedBody.password = '***';
+    console.log(`   📦 Body:`, JSON.stringify(sanitizedBody, null, 2));
+  }
+  
+  // Log query params se presenti
+  if (req.query && Object.keys(req.query).length > 0) {
+    console.log(`   🔍 Query:`, req.query);
+  }
+  
+  next();
+});
+
 // Mount routes
 app.use('/api/worksites', worksitesRoutes);
 
@@ -528,15 +549,21 @@ app.put('/api/settings/:key', (req, res) => {
 // Routes
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
+  console.log(`🔐 [LOGIN] Tentativo di login per: ${email}`);
+  
   db.get('SELECT * FROM employees WHERE email = ? AND password = ?', [email, password], (err, row) => {
     if (err) {
+      console.error(`❌ [LOGIN] Errore database:`, err.message);
       res.status(500).json({ error: err.message });
       return;
     }
     if (!row) {
+      console.log(`⛔ [LOGIN] Credenziali non valide per: ${email}`);
       res.status(401).json({ error: 'Credenziali non valide' });
       return;
     }
+    
+    console.log(`✅ [LOGIN] Login riuscito - ID: ${row.id}, Nome: ${row.name}, Admin: ${row.isAdmin ? 'Sì' : 'No'}`);
     
     // Non inviare la password al client
     const { password: _, ...employeeWithoutPassword } = row;
@@ -587,6 +614,15 @@ app.get('/api/attendance', (req, res) => {
 
 app.post('/api/attendance', (req, res) => {
   const record = req.body;
+  
+  console.log(`⏱️  [TIMBRATURA] Nuova timbratura ricevuta`);
+  console.log(`   👤 Dipendente ID: ${record.employeeId}`);
+  console.log(`   🏗️  Cantiere ID: ${record.workSiteId}`);
+  console.log(`   ⏰ Timestamp: ${record.timestamp}`);
+  console.log(`   ${record.type === 'in' ? '➡️  Tipo: INGRESSO' : '⬅️  Tipo: USCITA'}`);
+  console.log(`   📍 Coordinate: ${record.latitude}, ${record.longitude}`);
+  console.log(`   📱 Dispositivo: ${record.deviceInfo}`);
+  
   db.run(`INSERT INTO attendance_records 
     (employeeId, workSiteId, timestamp, type, deviceInfo, latitude, longitude, isForced, forcedByAdminId) 
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -601,18 +637,22 @@ app.post('/api/attendance', (req, res) => {
       record.isForced || 0,
       record.forcedByAdminId || null
     ],
-    async (err) => {
+    async function(err) {
       if (err) {
+        console.error(`❌ [TIMBRATURA] Errore inserimento:`, err.message);
         res.status(500).json({ error: err.message });
         return;
       }
       
+      console.log(`✅ [TIMBRATURA] Registrata con successo - Record ID: ${this.lastID}`);
+      
       // Aggiorna il report Excel
       try {
         await updateExcelReport();
+        console.log(`📊 [TIMBRATURA] Report Excel aggiornato`);
         res.json({ success: true });
       } catch (error) {
-        console.error('Error updating Excel report:', error);
+        console.error('⚠️  [TIMBRATURA] Errore aggiornamento report Excel:', error.message);
         res.json({ success: true }); // La timbratura è comunque riuscita
       }
     });
@@ -622,7 +662,16 @@ app.post('/api/attendance', (req, res) => {
 app.post('/api/attendance/force', (req, res) => {
   const { employeeId, workSiteId, type, adminId, notes, timestamp } = req.body;
   
+  console.log(`🔨 [TIMBRATURA FORZATA] Richiesta ricevuta`);
+  console.log(`   👤 Dipendente ID: ${employeeId}`);
+  console.log(`   🏗️  Cantiere ID: ${workSiteId}`);
+  console.log(`   ${type === 'in' ? '➡️  Tipo: INGRESSO' : '⬅️  Tipo: USCITA'}`);
+  console.log(`   👨‍💼 Admin ID: ${adminId}`);
+  console.log(`   📝 Note: ${notes || 'Nessuna'}`);
+  console.log(`   ⏰ Timestamp personalizzato: ${timestamp || 'No (usa ora corrente)'}`);
+  
   if (!employeeId || !workSiteId || !type || !adminId) {
+    console.error(`❌ [TIMBRATURA FORZATA] Parametri mancanti`);
     res.status(400).json({ error: 'Missing required fields' });
     return;
   }
@@ -630,14 +679,18 @@ app.post('/api/attendance/force', (req, res) => {
   // Verifica che l'admin esista ed sia effettivamente admin
   db.get('SELECT * FROM employees WHERE id = ? AND isAdmin = 1', [adminId], (err, admin) => {
     if (err) {
+      console.error(`❌ [TIMBRATURA FORZATA] Errore verifica admin:`, err.message);
       res.status(500).json({ error: err.message });
       return;
     }
     
     if (!admin) {
+      console.error(`⛔ [TIMBRATURA FORZATA] Admin ID ${adminId} non autorizzato`);
       res.status(403).json({ error: 'Unauthorized: Not an admin' });
       return;
     }
+    
+    console.log(`✅ [TIMBRATURA FORZATA] Admin verificato: ${admin.name} (${admin.email})`);
     
     // Crea il deviceInfo con admin e note
     let deviceInfo = `Forzato da ${admin.name}`;
@@ -648,16 +701,12 @@ app.post('/api/attendance/force', (req, res) => {
     // Determina il timestamp da usare
     let finalTimestamp;
     if (timestamp && timestamp.trim()) {
-      // Usa timestamp personalizzato fornito dall'admin
-      // Assume formato ISO 8601 (es: "2025-10-15T14:30:00.000")
       finalTimestamp = timestamp;
-      console.log('Using custom timestamp:', finalTimestamp);
+      console.log(`⏰ [TIMBRATURA FORZATA] Usando timestamp personalizzato: ${finalTimestamp}`);
     } else {
-      // Usa timestamp attuale in formato locale (non UTC) per consistenza con i record normali
-      // I record normali arrivano da Flutter con DateTime.now() che è locale
       const now = new Date();
       finalTimestamp = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().slice(0, -1);
-      console.log('Using current timestamp:', finalTimestamp);
+      console.log(`⏰ [TIMBRATURA FORZATA] Usando timestamp corrente: ${finalTimestamp}`);
     }
     
     // Crea record di timbratura forzata
@@ -674,20 +723,25 @@ app.post('/api/attendance/force', (req, res) => {
         0.0, // Longitude 0 per timbrature forzate
         1,   // isForced = true
         adminId,
-        notes && notes.trim() ? notes.trim() : null // Salva le note in colonna separata
+        notes && notes.trim() ? notes.trim() : null
       ],
-      async (err) => {
+      async function(err) {
         if (err) {
+          console.error(`❌ [TIMBRATURA FORZATA] Errore inserimento:`, err.message);
           res.status(500).json({ error: err.message });
           return;
         }
         
+        console.log(`✅ [TIMBRATURA FORZATA] Registrata con successo - Record ID: ${this.lastID}`);
+        console.log(`   📋 DeviceInfo: ${deviceInfo}`);
+        
         // Aggiorna il report Excel
         try {
           await updateExcelReport();
+          console.log(`📊 [TIMBRATURA FORZATA] Report Excel aggiornato`);
           res.json({ success: true, message: 'Forced attendance recorded' });
         } catch (error) {
-          console.error('Error updating Excel report:', error);
+          console.error('⚠️  [TIMBRATURA FORZATA] Errore aggiornamento report Excel:', error.message);
           res.json({ success: true, message: 'Forced attendance recorded' });
         }
       });
@@ -716,13 +770,21 @@ app.post('/api/employees', (req, res) => {
   const isAdminValue = isAdmin === 1 || isAdmin === true ? 1 : 0;
   const allowNightShiftValue = allowNightShift === 1 || allowNightShift === true ? 1 : 0;
   
+  console.log(`➕ [DIPENDENTE] Creazione nuovo dipendente`);
+  console.log(`   👤 Nome: ${name}`);
+  console.log(`   📧 Email: ${email}`);
+  console.log(`   👨‍💼 Admin: ${isAdminValue ? 'Sì' : 'No'}`);
+  console.log(`   🌙 Turni notturni: ${allowNightShiftValue ? 'Sì' : 'No'}`);
+  
   db.run('INSERT INTO employees (name, email, password, isAdmin, allowNightShift) VALUES (?, ?, ?, ?, ?)',
     [name, email, password, isAdminValue, allowNightShiftValue],
     function(err) {
       if (err) {
+        console.error(`❌ [DIPENDENTE] Errore creazione:`, err.message);
         res.status(500).json({ error: err.message });
         return;
       }
+      console.log(`✅ [DIPENDENTE] Creato con successo - ID: ${this.lastID}`);
       res.json({ id: this.lastID });
     });
 });
@@ -731,6 +793,13 @@ app.put('/api/employees/:id', (req, res) => {
   const { name, email, password, isAdmin, allowNightShift } = req.body;
   const isAdminValue = isAdmin === 1 || isAdmin === true ? 1 : 0;
   const allowNightShiftValue = allowNightShift === 1 || allowNightShift === true ? 1 : 0;
+  
+  console.log(`✏️  [DIPENDENTE] Aggiornamento dipendente ID: ${req.params.id}`);
+  console.log(`   👤 Nome: ${name}`);
+  console.log(`   📧 Email: ${email}`);
+  console.log(`   👨‍💼 Admin: ${isAdminValue ? 'Sì' : 'No'}`);
+  console.log(`   🌙 Turni notturni: ${allowNightShiftValue ? 'Sì' : 'No'}`);
+  console.log(`   🔑 Password: ${password && password.length > 0 ? 'Aggiornata' : 'Non modificata'}`);
   
   // Se la password è fornita, aggiorniamo anche quella
   let query, params;
@@ -744,9 +813,11 @@ app.put('/api/employees/:id', (req, res) => {
   
   db.run(query, params, function(err) {
     if (err) {
+      console.error(`❌ [DIPENDENTE] Errore aggiornamento:`, err.message);
       res.status(500).json({ error: err.message });
       return;
     }
+    console.log(`✅ [DIPENDENTE] Aggiornato con successo - Righe modificate: ${this.changes}`);
     res.json({ success: true, changes: this.changes });
   });
 });
@@ -754,11 +825,14 @@ app.put('/api/employees/:id', (req, res) => {
 app.delete('/api/employees/:id', (req, res) => {
   const employeeId = req.params.id;
   
+  console.log(`🗑️  [DIPENDENTE] Richiesta eliminazione dipendente ID: ${employeeId}`);
+  
   // Step 1: Verifica se il dipendente ha timbrature
   db.get('SELECT COUNT(*) as count FROM attendance_records WHERE employeeId = ?', 
     [employeeId], 
     (err, result) => {
       if (err) {
+        console.error(`❌ [DIPENDENTE] Errore verifica timbrature:`, err.message);
         res.status(500).json({ error: err.message });
         return;
       }
@@ -767,15 +841,17 @@ app.delete('/api/employees/:id', (req, res) => {
       
       if (hasAttendance) {
         // SOFT DELETE: Dipendente con timbrature → marca come inattivo per preservare storico
-        console.log(`🔒 Soft delete dipendente ${employeeId} (${result.count} timbrature trovate)`);
+        console.log(`🔒 [DIPENDENTE] SOFT DELETE - Dipendente ${employeeId} ha ${result.count} timbrature`);
         
         db.run('UPDATE employees SET isActive = 0, deletedAt = ? WHERE id = ?',
           [new Date().toISOString(), employeeId],
-          (err) => {
+          function(err) {
             if (err) {
+              console.error(`❌ [DIPENDENTE] Errore soft delete:`, err.message);
               res.status(500).json({ error: err.message });
               return;
             }
+            console.log(`✅ [DIPENDENTE] Soft delete completato - Dipendente disattivato (${result.count} timbrature preservate)`);
             res.json({ 
               success: true, 
               deleted: false, // Soft delete
@@ -785,13 +861,15 @@ app.delete('/api/employees/:id', (req, res) => {
         );
       } else {
         // HARD DELETE: Dipendente senza timbrature → elimina completamente
-        console.log(`🗑️  Hard delete dipendente ${employeeId} (nessuna timbratura)`);
+        console.log(`🗑️  [DIPENDENTE] HARD DELETE - Dipendente ${employeeId} senza timbrature`);
         
-        db.run('DELETE FROM employees WHERE id = ?', [employeeId], (err) => {
+        db.run('DELETE FROM employees WHERE id = ?', [employeeId], function(err) {
           if (err) {
+            console.error(`❌ [DIPENDENTE] Errore hard delete:`, err.message);
             res.status(500).json({ error: err.message });
             return;
           }
+          console.log(`✅ [DIPENDENTE] Hard delete completato - Dipendente eliminato definitivamente`);
           res.json({ 
             success: true, 
             deleted: true, // Hard delete

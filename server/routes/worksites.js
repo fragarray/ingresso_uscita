@@ -7,6 +7,8 @@ const router = express.Router();
 
 // Get all work sites
 router.get('/', (req, res) => {
+  console.log(`📋 [CANTIERI] Richiesta lista cantieri`);
+  
   db.all(`SELECT 
     id,
     name,
@@ -20,10 +22,11 @@ router.get('/', (req, res) => {
     FROM work_sites 
     ORDER BY createdAt DESC`, [], (err, rows) => {
     if (err) {
-      console.error(err);
+      console.error(`❌ [CANTIERI] Errore recupero lista:`, err.message);
       res.status(500).json({ error: 'Internal server error' });
       return;
     }
+    console.log(`✅ [CANTIERI] Restituiti ${rows.length} cantieri`);
     res.json(rows);
   });
 });
@@ -32,7 +35,16 @@ router.get('/', (req, res) => {
 router.post('/', (req, res) => {
   const { name, latitude, longitude, address, isActive, radiusMeters, description } = req.body;
 
+  console.log(`➕ [CANTIERE] Creazione nuovo cantiere`);
+  console.log(`   🏗️  Nome: ${name}`);
+  console.log(`   📍 Coordinate: ${latitude}, ${longitude}`);
+  console.log(`   🗺️  Indirizzo: ${address}`);
+  console.log(`   📏 Raggio: ${radiusMeters || 100}m`);
+  console.log(`   ✅ Attivo: ${isActive !== false ? 'Sì' : 'No'}`);
+  console.log(`   📝 Descrizione: ${description || 'Nessuna'}`);
+
   if (!name || !latitude || !longitude || !address) {
+    console.error(`❌ [CANTIERE] Parametri mancanti per la creazione`);
     res.status(400).json({ error: 'Missing required fields' });
     return;
   }
@@ -46,13 +58,17 @@ router.post('/', (req, res) => {
     [name, latitude, longitude, address, activeValue, radius, description || null],
     function(err) {
       if (err) {
-        console.error(err);
+        console.error(`❌ [CANTIERE] Errore creazione:`, err.message);
         res.status(500).json({ error: 'Internal server error' });
         return;
       }
+      
+      console.log(`✅ [CANTIERE] Creato con successo - ID: ${this.lastID}`);
+      
       // Restituisco il cantiere appena creato
       db.get('SELECT * FROM work_sites WHERE id = ?', [this.lastID], (err, row) => {
         if (err) {
+          console.error(`❌ [CANTIERE] Errore recupero dati appena creati:`, err.message);
           res.status(500).json({ error: 'Internal server error' });
           return;
         }
@@ -67,9 +83,16 @@ router.put('/:id', (req, res) => {
   const { name, latitude, longitude, address, isActive, radiusMeters, description } = req.body;
   const id = req.params.id;
 
-  console.log('UPDATE work site request:', { id, name, latitude, longitude, address, isActive, radiusMeters, description });
+  console.log(`✏️  [CANTIERE] Aggiornamento cantiere ID: ${id}`);
+  console.log(`   🏗️  Nome: ${name}`);
+  console.log(`   📍 Coordinate: ${latitude}, ${longitude}`);
+  console.log(`   🗺️  Indirizzo: ${address}`);
+  console.log(`   📏 Raggio: ${radiusMeters}m`);
+  console.log(`   ✅ Attivo: ${isActive ? 'Sì' : 'No'}`);
+  console.log(`   📝 Descrizione: ${description || 'Nessuna'}`);
 
   if (!name || !latitude || !longitude || !address || (isActive === undefined && isActive === null)) {
+    console.error(`❌ [CANTIERE] Parametri mancanti per l'aggiornamento`);
     res.status(400).json({ error: 'Missing required fields' });
     return;
   }
@@ -77,18 +100,16 @@ router.put('/:id', (req, res) => {
   const activeValue = typeof isActive === 'boolean' ? (isActive ? 1 : 0) : (isActive ? 1 : 0);
   const radius = radiusMeters !== undefined ? radiusMeters : 100.0;
 
-  console.log('Updating with values:', { activeValue, radius, description });
-
   db.run(
     'UPDATE work_sites SET name = ?, latitude = ?, longitude = ?, address = ?, isActive = ?, radiusMeters = ?, description = ? WHERE id = ?',
     [name, latitude, longitude, address, activeValue, radius, description || null, id],
     function(err) {
       if (err) {
-        console.error('Update error:', err);
+        console.error(`❌ [CANTIERE] Errore aggiornamento:`, err.message);
         res.status(500).json({ error: 'Internal server error' });
         return;
       }
-      console.log('Work site updated successfully, rows affected:', this.changes);
+      console.log(`✅ [CANTIERE] Aggiornato con successo - Righe modificate: ${this.changes}`);
       res.json({ success: true, changes: this.changes });
     }
   );
@@ -230,12 +251,17 @@ router.delete('/:id', async (req, res) => {
     console.log(`✓ Backup cantiere salvato: ${fileName}`);
 
     // Ora elimina il cantiere
-    db.run('DELETE FROM work_sites WHERE id = ?', [id], (err) => {
+    console.log(`🗑️  [CANTIERE] Eliminazione cantiere ID: ${id} (${workSite.name})`);
+    console.log(`   📦 Backup creato: ${fileName}`);
+    console.log(`   📊 Timbrature preservate: ${records.length}`);
+    
+    db.run('DELETE FROM work_sites WHERE id = ?', [id], function(err) {
       if (err) {
-        console.error(err);
+        console.error(`❌ [CANTIERE] Errore eliminazione:`, err.message);
         res.status(500).json({ error: 'Internal server error' });
         return;
       }
+      console.log(`✅ [CANTIERE] Eliminato con successo - Backup: ${fileName}`);
       res.json({ 
         success: true, 
         backupFile: fileName,
