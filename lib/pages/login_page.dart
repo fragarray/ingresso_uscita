@@ -176,19 +176,28 @@ class _LoginPageState extends State<LoginPage> {
         title: const Text('Sistema Timbratura'),
       ),
       body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(30.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text(
-                'Benvenuto',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 26,
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(30.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Logo Sinergy Work
+                Image.asset(
+                  'assets/images/logo.png',
+                  width: 250,
+                  height: 250,
+                  fit: BoxFit.contain,
                 ),
-              ),
-              const SizedBox(height: 20),
+                const SizedBox(height: 30),
+                const Text(
+                  'Benvenuto',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 26,
+                  ),
+                ),
+                const SizedBox(height: 20),
               TextField(
                 controller: _emailController,
                 enabled: !_isLoading,
@@ -257,6 +266,7 @@ class _LoginPageState extends State<LoginPage> {
             ],
           ),
         ),
+      ),
       ),
     );
   }

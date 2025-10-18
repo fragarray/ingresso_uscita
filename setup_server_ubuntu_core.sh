@@ -1,12 +1,12 @@
 #!/bin/bash
 
 #######################################################################
-# Script di Setup Server Ingresso/Uscita
+# Script di Setup Server Ingresso/Uscita - Ubuntu Core IoT Edition
 # 
-# Questo script scarica e configura automaticamente il server
-# di gestione presenze su una macchina remota (es. Raspberry Pi)
+# Questo script è ottimizzato per Ubuntu Core IoT su Raspberry Pi
+# Usa snap packages invece di apt
 #
-# Uso: bash setup_server.sh
+# Uso: bash setup_server_ubuntu_core.sh
 #######################################################################
 
 set -e  # Esce in caso di errore
@@ -20,14 +20,24 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   Setup Server Ingresso/Uscita                       ║${NC}"
-echo -e "${BLUE}║   Configurazione automatica per Raspberry Pi/Linux   ║${NC}"
+echo -e "${BLUE}║   Ubuntu Core IoT Edition                            ║${NC}"
 echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
 echo ""
 
 # Verifica sistema operativo
 echo -e "${YELLOW}[1/7] Verifica sistema operativo...${NC}"
 if [[ "$OSTYPE" != "linux-gnu"* ]]; then
-    echo -e "${YELLOW}⚠ Attenzione: questo script è ottimizzato per Linux/Raspberry Pi${NC}"
+    echo -e "${RED}✗ Questo script richiede Linux${NC}"
+    exit 1
+fi
+
+# Verifica se è Ubuntu Core
+if command -v snap &> /dev/null; then
+    echo -e "${GREEN}✓ Sistema Ubuntu Core rilevato${NC}"
+    IS_UBUNTU_CORE=true
+else
+    echo -e "${YELLOW}⚠️ Sistema Linux standard (non Ubuntu Core)${NC}"
+    IS_UBUNTU_CORE=false
     read -p "Continuare comunque? (s/n) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Ss]$ ]]; then
@@ -35,19 +45,22 @@ if [[ "$OSTYPE" != "linux-gnu"* ]]; then
     fi
 fi
 
-# Installazione Node.js e npm se non presenti
+# Installazione Node.js
 echo -e "${YELLOW}[2/7] Verifica installazione Node.js...${NC}"
 if ! command -v node &> /dev/null; then
     echo -e "${YELLOW}Node.js non trovato. Installazione in corso...${NC}"
     
-    # Aggiorna lista pacchetti
-    sudo apt-get update
-    
-    # Installa Node.js (versione LTS consigliata)
-    curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-    
-    echo -e "${GREEN}✓ Node.js installato con successo${NC}"
+    if [ "$IS_UBUNTU_CORE" = true ]; then
+        # Ubuntu Core: usa snap
+        sudo snap install node --classic --channel=20/stable
+        echo -e "${GREEN}✓ Node.js installato via snap${NC}"
+    else
+        # Ubuntu standard: usa apt
+        sudo apt-get update
+        curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+        sudo apt-get install -y nodejs
+        echo -e "${GREEN}✓ Node.js installato via apt${NC}"
+    fi
 else
     NODE_VERSION=$(node -v)
     echo -e "${GREEN}✓ Node.js già installato: ${NODE_VERSION}${NC}"
@@ -55,29 +68,52 @@ fi
 
 # Verifica npm
 if ! command -v npm &> /dev/null; then
-    echo -e "${RED}✗ npm non trovato. Installazione...${NC}"
-    sudo apt-get install -y npm
+    echo -e "${RED}✗ npm non trovato${NC}"
+    if [ "$IS_UBUNTU_CORE" = true ]; then
+        echo -e "${YELLOW}Reinstallo Node.js con npm...${NC}"
+        sudo snap refresh node --channel=20/stable
+    else
+        sudo apt-get install -y npm
+    fi
 fi
 NPM_VERSION=$(npm -v)
 echo -e "${GREEN}✓ npm versione: ${NPM_VERSION}${NC}"
 
-# Installazione Git se non presente
+# Installazione Git
 echo -e "${YELLOW}[3/7] Verifica installazione Git...${NC}"
 if ! command -v git &> /dev/null; then
     echo -e "${YELLOW}Git non trovato. Installazione in corso...${NC}"
-    sudo apt-get install -y git
-    echo -e "${GREEN}✓ Git installato con successo${NC}"
+    
+    if [ "$IS_UBUNTU_CORE" = true ]; then
+        # Ubuntu Core: usa snap
+        sudo snap install git-ubuntu --classic
+        # Crea alias per compatibilità
+        sudo ln -sf /snap/bin/git-ubuntu.git /usr/local/bin/git 2>/dev/null || true
+        echo -e "${GREEN}✓ Git installato via snap${NC}"
+    else
+        # Ubuntu standard: usa apt
+        sudo apt-get install -y git
+        echo -e "${GREEN}✓ Git installato via apt${NC}"
+    fi
 else
     GIT_VERSION=$(git --version)
     echo -e "${GREEN}✓ Git già installato: ${GIT_VERSION}${NC}"
 fi
 
-# Installazione SQLite3 se non presente
+# Installazione SQLite3
 echo -e "${YELLOW}[4/7] Verifica installazione SQLite3...${NC}"
 if ! command -v sqlite3 &> /dev/null; then
     echo -e "${YELLOW}SQLite3 non trovato. Installazione in corso...${NC}"
-    sudo apt-get install -y sqlite3
-    echo -e "${GREEN}✓ SQLite3 installato con successo${NC}"
+    
+    if [ "$IS_UBUNTU_CORE" = true ]; then
+        # Ubuntu Core: usa snap o installa binario manualmente
+        # SQLite3 non è critico per il funzionamento (è una dipendenza npm)
+        echo -e "${YELLOW}SQLite3 CLI non disponibile via snap, ma sqlite3 npm funzionerà${NC}"
+    else
+        # Ubuntu standard: usa apt
+        sudo apt-get install -y sqlite3
+        echo -e "${GREEN}✓ SQLite3 installato via apt${NC}"
+    fi
 else
     SQLITE_VERSION=$(sqlite3 --version)
     echo -e "${GREEN}✓ SQLite3 già installato: ${SQLITE_VERSION}${NC}"
@@ -85,7 +121,14 @@ fi
 
 # Crea directory del progetto
 echo -e "${YELLOW}[5/7] Creazione directory del progetto...${NC}"
-PROJECT_DIR="$HOME/ingresso_uscita_server"
+
+# In Ubuntu Core, usa directory accessibile
+if [ "$IS_UBUNTU_CORE" = true ]; then
+    # Usa /var/snap/node/common/ per dati persistenti
+    PROJECT_DIR="/var/snap/node/common/ingresso_uscita_server"
+else
+    PROJECT_DIR="$HOME/ingresso_uscita_server"
+fi
 
 if [ -d "$PROJECT_DIR" ]; then
     echo -e "${YELLOW}⚠ La directory $PROJECT_DIR esiste già${NC}"
@@ -94,7 +137,7 @@ if [ -d "$PROJECT_DIR" ]; then
     if [[ $REPLY =~ ^[Ss]$ ]]; then
         echo -e "${YELLOW}Backup della directory esistente...${NC}"
         BACKUP_DIR="${PROJECT_DIR}_backup_$(date +%Y%m%d_%H%M%S)"
-        mv "$PROJECT_DIR" "$BACKUP_DIR"
+        sudo mv "$PROJECT_DIR" "$BACKUP_DIR" 2>/dev/null || mv "$PROJECT_DIR" "$BACKUP_DIR"
         echo -e "${GREEN}✓ Backup creato in: ${BACKUP_DIR}${NC}"
     else
         echo -e "${RED}✗ Installazione annullata${NC}"
@@ -102,7 +145,14 @@ if [ -d "$PROJECT_DIR" ]; then
     fi
 fi
 
-mkdir -p "$PROJECT_DIR"
+# Crea directory con permessi corretti
+if [ "$IS_UBUNTU_CORE" = true ]; then
+    sudo mkdir -p "$PROJECT_DIR"
+    sudo chown $USER:$USER "$PROJECT_DIR"
+else
+    mkdir -p "$PROJECT_DIR"
+fi
+
 cd "$PROJECT_DIR"
 echo -e "${GREEN}✓ Directory creata: ${PROJECT_DIR}${NC}"
 
@@ -247,26 +297,17 @@ echo -e "${YELLOW}🚀 Per avviare il server manualmente:${NC}"
 echo -e "   ${GREEN}cd ${PROJECT_DIR}${NC}"
 echo -e "   ${GREEN}node server.js${NC}"
 echo ""
-echo -e "${YELLOW}🔧 Opzioni di gestione server:${NC}"
-echo ""
-echo -e "${BLUE}Opzione 1 - PM2 (Process Manager):${NC}"
-echo -e "   ${GREEN}npm install -g pm2${NC}"
-echo -e "   ${GREEN}cd ${PROJECT_DIR}${NC}"
-echo -e "   ${GREEN}pm2 start server.js --name ingresso-uscita${NC}"
-echo -e "   ${GREEN}pm2 save${NC}"
-echo -e "   ${GREEN}pm2 startup${NC}  ${BLUE}# per avvio automatico al boot${NC}"
-echo ""
-echo -e "${YELLOW}📊 Comandi utili PM2:${NC}"
-echo -e "   ${GREEN}pm2 status${NC}           ${BLUE}# Stato dei processi${NC}"
-echo -e "   ${GREEN}pm2 logs${NC}             ${BLUE}# Visualizza i log${NC}"
-echo -e "   ${GREEN}pm2 restart all${NC}      ${BLUE}# Riavvia i processi${NC}"
-echo -e "   ${GREEN}pm2 stop all${NC}         ${BLUE}# Ferma i processi${NC}"
-echo ""
-echo -e "${BLUE}Opzione 2 - systemd (Servizio di Sistema):${NC}"
-echo -e "   ${YELLOW}Il setup ti chiederà se vuoi configurare automaticamente systemd${NC}"
-echo -e "   ${YELLOW}In alternativa, crea manualmente:${NC} ${GREEN}/etc/systemd/system/ingresso-uscita.service${NC}"
-echo ""
-echo -e "${YELLOW}📊 Comandi utili systemd:${NC}"
+
+# Ubuntu Core: solo systemd (PM2 ha problemi con snap confinement)
+if [ "$IS_UBUNTU_CORE" = true ]; then
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}⚠️  UBUNTU CORE: Solo systemd è supportato${NC}"
+    echo -e "${YELLOW}PM2 non funziona correttamente con snap confinement${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+fi
+
+echo -e "${YELLOW}🔧 Gestione server (systemd):${NC}"
 echo -e "   ${GREEN}sudo systemctl start ingresso-uscita${NC}    ${BLUE}# Avvia${NC}"
 echo -e "   ${GREEN}sudo systemctl stop ingresso-uscita${NC}     ${BLUE}# Ferma${NC}"
 echo -e "   ${GREEN}sudo systemctl restart ingresso-uscita${NC}  ${BLUE}# Riavvia${NC}"
@@ -278,33 +319,24 @@ echo -e "${YELLOW}⚙️  Configurazione app Flutter:${NC}"
 echo -e "   Nell'app, vai in ${GREEN}Impostazioni${NC} e imposta l'indirizzo IP:"
 echo -e "   ${GREEN}${IP_ADDRESS}${NC}"
 echo ""
-echo -e "${YELLOW}🗄️  Database:${NC}"
-echo -e "   Il database SQLite verrà creato automaticamente in:"
-echo -e "   ${GREEN}${PROJECT_DIR}/ingresso_uscita.db${NC}"
-echo ""
-echo -e "${YELLOW}� Configurazione Email:${NC}"
+echo -e "${YELLOW}📧 Configurazione Email:${NC}"
 echo -e "   Modifica il file di configurazione:"
 echo -e "   ${GREEN}nano ${PROJECT_DIR}/email_config.json${NC}"
-echo -e "   Segui la guida: ${GREEN}${PROJECT_DIR}/SETUP_EMAIL.md${NC}"
-echo ""
-echo -e "${YELLOW}�💾 Backup:${NC}"
-echo -e "   I backup verranno salvati in:"
-echo -e "   ${GREEN}${PROJECT_DIR}/backups/${NC}"
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-echo -e "${YELLOW}📝 Note:${NC}"
-echo -e "   • Il server sarà accessibile sulla porta 3000"
-echo -e "   • Assicurati che il firewall permetta connessioni sulla porta 3000"
-echo -e "   • Configura email_config.json prima di usare le email"
-echo -e "   • I log del server sono disponibili nei file di log o con i comandi del gestore scelto"
+echo -e "${YELLOW}📝 Note Ubuntu Core:${NC}"
+echo -e "   • Node.js installato come snap confinato"
+echo -e "   • Il server gira in ${PROJECT_DIR}"
+echo -e "   • Usa systemd per gestione automatica"
+echo -e "   • PM2 NON è supportato su Ubuntu Core"
 echo ""
 
 echo ""
 echo -e "${GREEN}✨ Installazione completata! Buon lavoro! ✨${NC}"
 echo ""
 
-# ==================== TEST RAPIDO SERVER ====================
+# Test rapido server (opzionale, può fallire su Ubuntu Core per permessi)
 echo -e "${YELLOW}Eseguo test rapido del server...${NC}"
 timeout 5 node server.js > /tmp/server_test.log 2>&1 &
 SERVER_PID=$!
@@ -314,7 +346,7 @@ sleep 3
 if curl -s http://localhost:3000/api/ping > /dev/null 2>&1; then
     echo -e "${GREEN}✓ Server funzionante (test superato)${NC}"
 else
-    echo -e "${YELLOW}⚠️  Test non riuscito (probabilmente normale, il server partirà dopo)${NC}"
+    echo -e "${YELLOW}⚠️  Test non riuscito (probabilmente normale su Ubuntu Core)${NC}"
 fi
 
 # Ferma il test
@@ -330,7 +362,10 @@ create_systemd_service() {
     
     echo -e "${YELLOW}Creazione servizio systemd...${NC}"
     
-    # Crea il file di configurazione (basato sul tuo systemctl funzionante)
+    # Rileva percorso node (diverso tra snap e apt)
+    NODE_PATH=$(which node)
+    
+    # Crea il file di configurazione
     sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
 Description=Server Ingresso/Uscita - Sistema Gestione Presenze
@@ -340,7 +375,7 @@ After=network.target
 Type=simple
 User=$USER
 WorkingDirectory=$PROJECT_DIR
-ExecStart=$(which node) $PROJECT_DIR/server.js
+ExecStart=$NODE_PATH $PROJECT_DIR/server.js
 Restart=always
 RestartSec=10
 StandardOutput=syslog
@@ -351,7 +386,10 @@ SyslogIdentifier=ingresso-uscita
 Environment=NODE_ENV=production
 Environment=PORT=3000
 
-# Limiti di sicurezza (opzionali)
+# Ubuntu Core snap: permessi necessari
+Environment=PATH=/snap/bin:/usr/local/bin:/usr/bin:/bin
+
+# Limiti di sicurezza
 LimitNOFILE=4096
 
 [Install]
@@ -363,6 +401,7 @@ EOF
     
     echo -e "${GREEN}✓ Servizio systemd creato: ${SERVICE_NAME}${NC}"
     echo -e "${BLUE}File di configurazione: ${SERVICE_FILE}${NC}"
+    echo -e "${BLUE}Node.js path: ${NODE_PATH}${NC}"
     echo ""
     echo -e "${YELLOW}Comandi disponibili:${NC}"
     echo -e "   ${GREEN}sudo systemctl start ${SERVICE_NAME}${NC}      ${BLUE}# Avvia il server${NC}"
@@ -370,13 +409,10 @@ EOF
     echo -e "   ${GREEN}sudo systemctl restart ${SERVICE_NAME}${NC}    ${BLUE}# Riavvia il server${NC}"
     echo -e "   ${GREEN}sudo systemctl status ${SERVICE_NAME}${NC}     ${BLUE}# Stato del server${NC}"
     echo -e "   ${GREEN}sudo systemctl enable ${SERVICE_NAME}${NC}     ${BLUE}# Abilita avvio automatico${NC}"
-    echo -e "   ${GREEN}sudo systemctl disable ${SERVICE_NAME}${NC}    ${BLUE}# Disabilita avvio automatico${NC}"
     echo ""
     echo -e "${YELLOW}Log del server:${NC}"
     echo -e "   ${GREEN}sudo journalctl -u ${SERVICE_NAME} -f${NC}              ${BLUE}# Log in tempo reale${NC}"
     echo -e "   ${GREEN}sudo journalctl -t ingresso-uscita -f${NC}              ${BLUE}# Log filtrati per tag${NC}"
-    echo -e "   ${GREEN}sudo journalctl -u ${SERVICE_NAME} -n 100${NC}          ${BLUE}# Ultimi 100 log${NC}"
-    echo -e "   ${GREEN}sudo journalctl -u ${SERVICE_NAME} --since today${NC}   ${BLUE}# Log di oggi${NC}"
     echo ""
     
     read -p "$(echo -e ${YELLOW}Vuoi abilitare l\'avvio automatico? [s/N] ${NC})" -n 1 -r
@@ -399,53 +435,26 @@ EOF
 # ==================== MENU SCELTA GESTIONE SERVER ====================
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}Scegli come vuoi gestire il server:${NC}"
+echo -e "${YELLOW}Vuoi configurare il servizio systemd ora?${NC}"
 echo ""
-echo -e "${GREEN}1)${NC} Avvio manuale (node server.js)"
-echo -e "${GREEN}2)${NC} PM2 (process manager con monitoraggio)"
-echo -e "${GREEN}3)${NC} systemd (servizio di sistema nativo Linux)"
-echo -e "${GREEN}4)${NC} Nessuno (configuro dopo)"
+echo -e "${GREEN}1)${NC} Sì, configura systemd (raccomandato)"
+echo -e "${GREEN}2)${NC} No, configuro manualmente dopo"
 echo ""
-read -p "$(echo -e ${YELLOW}Scelta [1-4]: ${NC})" CHOICE
+read -p "$(echo -e ${YELLOW}Scelta [1-2]: ${NC})" CHOICE
 
 case $CHOICE in
     1)
-        echo -e "${YELLOW}Hai scelto avvio manuale${NC}"
-        echo -e "${GREEN}Per avviare il server:${NC}"
-        echo -e "   cd ${PROJECT_DIR}"
-        echo -e "   node server.js"
-        ;;
-    2)
-        echo -e "${YELLOW}Installazione PM2...${NC}"
-        if ! command -v pm2 &> /dev/null; then
-            sudo npm install -g pm2
-            echo -e "${GREEN}✓ PM2 installato${NC}"
-        else
-            echo -e "${GREEN}✓ PM2 già installato${NC}"
-        fi
-        
-        read -p "$(echo -e ${YELLOW}Vuoi avviare il server con PM2 ora? [s/N] ${NC})" -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Ss]$ ]]; then
-            pm2 start server.js --name ingresso-uscita
-            pm2 save
-            echo -e "${GREEN}✓ Server avviato con PM2${NC}"
-            
-            read -p "$(echo -e ${YELLOW}Vuoi configurare l\'avvio automatico con PM2? [s/N] ${NC})" -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Ss]$ ]]; then
-                pm2 startup
-                echo -e "${YELLOW}Esegui il comando mostrato sopra per completare la configurazione${NC}"
-            fi
-        fi
-        ;;
-    3)
         create_systemd_service
         ;;
-    4)
+    2)
         echo -e "${YELLOW}Nessuna configurazione automatica${NC}"
+        echo -e "${YELLOW}Usa i comandi mostrati sopra quando sei pronto${NC}"
         ;;
     *)
-        echo -e "${RED}Scelta non valida${NC}"
+        echo -e "${YELLOW}Scelta non valida, configura manualmente dopo${NC}"
         ;;
 esac
+
+echo ""
+echo -e "${GREEN}✨ Setup Ubuntu Core completato! ✨${NC}"
+echo ""
