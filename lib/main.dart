@@ -102,8 +102,13 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
   
-  void logout() {
+  Future<void> logout() async {
     _currentEmployee = null;
+    
+    // Disabilita l'auto-login quando si fa logout manualmente
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('auto_login', false);
+    
     notifyListeners();
   }
   

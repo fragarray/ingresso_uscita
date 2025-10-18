@@ -879,9 +879,9 @@ class _EmployeePageState extends State<EmployeePage> {
           IconButton(
             icon: Icon(Icons.logout_rounded, size: 22, color: Colors.grey[700]),
             tooltip: 'Esci',
-            onPressed: () {
+            onPressed: () async {
               if (mounted) {
-                _appState?.logout();
+                await _appState?.logout();
               }
             },
           ),

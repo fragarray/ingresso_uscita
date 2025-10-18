@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../main.dart';
 
@@ -14,6 +15,61 @@ class _LoginPageState extends State<LoginPage> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _isCheckingServer = false;
+  bool _rememberMe = false;
+  bool _isAutoLoggingIn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedCredentials();
+    _attemptAutoLogin();
+  }
+
+  Future<void> _loadSavedCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedEmail = prefs.getString('saved_email');
+    final savedPassword = prefs.getString('saved_password');
+    final rememberMe = prefs.getBool('remember_me') ?? false;
+
+    if (rememberMe && savedEmail != null && savedPassword != null) {
+      setState(() {
+        _emailController.text = savedEmail;
+        _passwordController.text = savedPassword;
+        _rememberMe = true;
+      });
+    }
+  }
+
+  Future<void> _attemptAutoLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    final autoLogin = prefs.getBool('auto_login') ?? false;
+    final savedEmail = prefs.getString('saved_email');
+    final savedPassword = prefs.getString('saved_password');
+
+    if (autoLogin && savedEmail != null && savedPassword != null) {
+      setState(() => _isAutoLoggingIn = true);
+
+      try {
+        final employee = await ApiService.login(savedEmail, savedPassword);
+        
+        if (employee != null && mounted) {
+          context.read<AppState>().setEmployee(employee);
+          // La navigazione è gestita automaticamente dal Consumer in main.dart
+        } else {
+          // Credenziali non più valide, disabilita auto-login
+          if (mounted) {
+            await prefs.setBool('auto_login', false);
+            setState(() => _isAutoLoggingIn = false);
+          }
+        }
+      } catch (e) {
+        // Errore di connessione, mostra la pagina di login
+        if (mounted) {
+          setState(() => _isAutoLoggingIn = false);
+        }
+      }
+    }
+  }
 
   Future<void> _login() async {
     final email = _emailController.text.trim();
@@ -32,6 +88,20 @@ class _LoginPageState extends State<LoginPage> {
       final employee = await ApiService.login(email, password);
       
       if (employee != null) {
+        // Salva le credenziali se "Ricorda" è attivo
+        final prefs = await SharedPreferences.getInstance();
+        if (_rememberMe) {
+          await prefs.setString('saved_email', email);
+          await prefs.setString('saved_password', password);
+          await prefs.setBool('remember_me', true);
+          await prefs.setBool('auto_login', true);
+        } else {
+          await prefs.remove('saved_email');
+          await prefs.remove('saved_password');
+          await prefs.setBool('remember_me', false);
+          await prefs.setBool('auto_login', false);
+        }
+
         if (!mounted) return;
         context.read<AppState>().setEmployee(employee);
         // La navigazione è gestita automaticamente dal Consumer in main.dart
@@ -171,6 +241,27 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Se stiamo tentando l'auto-login, mostra solo il logo e un indicatore di caricamento
+    if (_isAutoLoggingIn) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Image.asset(
+                'assets/images/logo.png',
+                width: 250,
+                height: 250,
+                fit: BoxFit.contain,
+              ),
+              const SizedBox(height: 40),
+              const CircularProgressIndicator(),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Sistema Timbratura'),
@@ -228,6 +319,37 @@ class _LoginPageState extends State<LoginPage> {
                     },
                   ),
                 ),
+              ),
+              const SizedBox(height: 10),
+              // Checkbox "Ricorda credenziali"
+              Row(
+                children: [
+                  Checkbox(
+                    value: _rememberMe,
+                    onChanged: _isLoading
+                        ? null
+                        : (value) {
+                            setState(() {
+                              _rememberMe = value ?? false;
+                            });
+                          },
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: _isLoading
+                          ? null
+                          : () {
+                              setState(() {
+                                _rememberMe = !_rememberMe;
+                              });
+                            },
+                      child: const Text(
+                        'Ricorda le credenziali',
+                        style: TextStyle(fontSize: 15),
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 20),
               SizedBox(

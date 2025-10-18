@@ -1,5 +1,5 @@
 {
-  "autoBackupEnabled": false,
-  "autoBackupDays": 7,
+  "autoBackupEnabled": true,
+  "autoBackupDays": 3,
   "lastBackupDate": "2025-10-14T18:21:30.480Z"
 }

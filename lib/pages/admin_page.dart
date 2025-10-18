@@ -31,7 +31,7 @@ class _AdminPageState extends State<AdminPage> {
           actions: [
             IconButton(
               icon: const Icon(Icons.logout),
-              onPressed: () => context.read<AppState>().logout(),
+              onPressed: () async => await context.read<AppState>().logout(),
             ),
           ],
           bottom: const TabBar(
@@ -737,10 +737,10 @@ class _SettingsTabState extends State<SettingsTab> {
             ),
             actions: [
               ElevatedButton(
-                onPressed: () {
+                onPressed: () async {
                   Navigator.pop(context);
                   // Logout e torna alla login
-                  context.read<AppState>().logout();
+                  await context.read<AppState>().logout();
                 },
                 child: const Text('OK'),
               ),
@@ -753,7 +753,7 @@ class _SettingsTabState extends State<SettingsTab> {
         
         // Forza logout e refresh
         if (!mounted) return;
-        context.read<AppState>().logout();
+        await context.read<AppState>().logout();
         
       } else {
         // Errore
