@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
@@ -645,27 +646,80 @@ class _SettingsTabState extends State<SettingsTab> {
   Future<void> _restoreFromBackup() async {
     try {
       // Usa file_picker per selezionare il file .db
+      // withData: true per ottenere i bytes (necessario per Android)
+      // FileType.any perché .db non è un'estensione riconosciuta su Android
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['db'],
+        type: FileType.any,
         dialogTitle: 'Seleziona file database (.db)',
+        withData: true, // Importante per Android
       );
 
       if (result == null || result.files.isEmpty) {
         return; // Utente ha annullato
       }
 
-      final filePath = result.files.first.path;
-      if (filePath == null) {
+      final pickedFile = result.files.first;
+      final fileName = pickedFile.name;
+      
+      // Verifica che sia un file .db
+      if (!fileName.toLowerCase().endsWith('.db')) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Errore: percorso file non valido'),
-            backgroundColor: Colors.red,
+            content: Text('Errore: seleziona un file con estensione .db'),
+            backgroundColor: Colors.orange,
           ),
         );
         return;
       }
+      
+      final fileBytes = pickedFile.bytes;
+      
+      // Su Android, bytes è disponibile, su desktop potrebbe servire il path
+      if (fileBytes == null) {
+        // Fallback per desktop: leggi dal path
+        final filePath = pickedFile.path;
+        if (filePath == null) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Errore: impossibile leggere il file'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          return;
+        }
+        // Leggi i bytes dal file (desktop)
+        final file = File(filePath);
+        if (!await file.exists()) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Errore: file non trovato'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          return;
+        }
+        final bytesFromFile = await file.readAsBytes();
+        await _proceedWithRestore(bytesFromFile, fileName);
+      } else {
+        // Android o web: usa i bytes direttamente
+        await _proceedWithRestore(fileBytes, fileName);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Errore durante la selezione del file: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+  
+  Future<void> _proceedWithRestore(List<int> fileBytes, String fileName) async {
+    try {
 
       // Conferma restore
       final confirm = await showDialog<bool>(
@@ -720,7 +774,7 @@ class _SettingsTabState extends State<SettingsTab> {
       );
 
       // Esegui restore
-      final response = await ApiService.restoreBackup(filePath);
+      final response = await ApiService.restoreBackup(fileBytes, fileName);
 
       if (!mounted) return;
       Navigator.pop(context); // Chiudi loading dialog

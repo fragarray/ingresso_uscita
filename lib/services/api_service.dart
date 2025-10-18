@@ -3,7 +3,6 @@ import 'dart:io';
 import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import '../models/attendance_record.dart';
@@ -848,17 +847,12 @@ class ApiService {
   }
 
   // Restore database from backup file
-  static Future<Map<String, dynamic>?> restoreBackup(String filePath) async {
+  static Future<Map<String, dynamic>?> restoreBackup(List<int> fileBytes, String fileName) async {
     try {
       final baseUrl = await getBaseUrl();
-      final file = File(filePath);
-
-      if (!await file.exists()) {
-        return {'success': false, 'error': 'File non trovato'};
-      }
 
       // Verifica estensione .db
-      if (!filePath.toLowerCase().endsWith('.db')) {
+      if (!fileName.toLowerCase().endsWith('.db')) {
         return {'success': false, 'error': 'Il file deve avere estensione .db'};
       }
 
@@ -867,11 +861,12 @@ class ApiService {
         Uri.parse('$baseUrl/backup/restore'),
       );
 
+      // Usa fromBytes invece di fromPath per compatibilità cross-platform
       request.files.add(
-        await http.MultipartFile.fromPath(
+        http.MultipartFile.fromBytes(
           'database',
-          filePath,
-          filename: path.basename(filePath),
+          fileBytes,
+          filename: fileName,
         ),
       );
 
