@@ -25,6 +25,10 @@
     "nodemailer": "^6.9.7",
     "sqlite3": "^5.1.7"
   },
+  "optionalDependencies": {},
+  "overrides": {
+    "fsevents": "npm:noop2@^2.0.0"
+  },
   "devDependencies": {
     "nodemon": "^3.0.1"
   }
