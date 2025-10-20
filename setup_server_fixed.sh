@@ -20,7 +20,7 @@ MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║   Setup Server Ingresso/Uscita v1.1.5                ║${NC}"
+echo -e "${BLUE}║   Setup Server Ingresso/Uscita v1.1.6                ║${NC}"
 echo -e "${BLUE}║   Raspberry Pi 5 / Linux ARM64/x64                   ║${NC}"
 echo -e "${BLUE}║   Con Audit Trail + Report Excel + Email            ║${NC}"
 echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
@@ -172,23 +172,13 @@ fi
 
 # Installa dipendenze
 echo -e "${YELLOW}Installazione in corso...${NC}"
-echo -e "${BLUE}Potrebbero apparire warning deprecation, è normale e non bloccante.${NC}"
-echo -e "${BLUE}L'installazione può richiedere 5-10 minuti, attendere...${NC}"
+echo -e "${BLUE}Questo passaggio può richiedere 5-10 minuti su Raspberry Pi...${NC}"
+echo -e "${BLUE}Potrebbero apparire warning deprecation, è normale.${NC}"
 echo ""
 
-# Esegui npm install senza tee per evitare problemi di buffer
-npm install > /tmp/npm_install.log 2>&1
-NPM_EXIT_CODE=$?
+npm install
 
-if [ $NPM_EXIT_CODE -ne 0 ]; then
-    echo -e "${RED}✗ Errore durante l'installazione npm${NC}"
-    echo -e "${YELLOW}Ultimi 50 righe del log:${NC}"
-    tail -n 50 /tmp/npm_install.log
-    echo ""
-    echo -e "${YELLOW}Log completo: /tmp/npm_install.log${NC}"
-    exit 1
-fi
-
+echo ""
 echo -e "${GREEN}✓ Installazione npm completata${NC}"
 
 # Verifica che sqlite3 sia installato correttamente (critico)
@@ -438,7 +428,7 @@ create_systemd_service() {
     # Crea il file di configurazione
     sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
-Description=Server Ingresso/Uscita - Sistema Gestione Presenze v1.1.5
+Description=Server Ingresso/Uscita - Sistema Gestione Presenze v1.1.6
 After=network.target
 
 [Service]
