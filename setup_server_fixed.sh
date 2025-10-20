@@ -20,7 +20,7 @@ MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║   Setup Server Ingresso/Uscita v1.1.4                ║${NC}"
+echo -e "${BLUE}║   Setup Server Ingresso/Uscita v1.1.5                ║${NC}"
 echo -e "${BLUE}║   Raspberry Pi 5 / Linux ARM64/x64                   ║${NC}"
 echo -e "${BLUE}║   Con Audit Trail + Report Excel + Email            ║${NC}"
 echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
@@ -438,7 +438,7 @@ create_systemd_service() {
     # Crea il file di configurazione
     sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
-Description=Server Ingresso/Uscita - Sistema Gestione Presenze v1.1.4
+Description=Server Ingresso/Uscita - Sistema Gestione Presenze v1.1.5
 After=network.target
 
 [Service]
