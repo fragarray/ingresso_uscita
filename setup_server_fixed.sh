@@ -171,13 +171,21 @@ if [ "$IS_ARM" = true ]; then
 fi
 
 # Installa dipendenze
-echo -e "${YELLOW}Installazione in corso... (potrebbero apparire warning, è normale)${NC}"
-npm install 2>&1 | tee /tmp/npm_install.log
-NPM_EXIT_CODE=${PIPESTATUS[0]}
+echo -e "${YELLOW}Installazione in corso...${NC}"
+echo -e "${BLUE}Potrebbero apparire warning deprecation, è normale e non bloccante.${NC}"
+echo -e "${BLUE}L'installazione può richiedere 5-10 minuti, attendere...${NC}"
+echo ""
+
+# Esegui npm install senza tee per evitare problemi di buffer
+npm install > /tmp/npm_install.log 2>&1
+NPM_EXIT_CODE=$?
 
 if [ $NPM_EXIT_CODE -ne 0 ]; then
     echo -e "${RED}✗ Errore durante l'installazione npm${NC}"
-    echo -e "${YELLOW}Controlla il log: /tmp/npm_install.log${NC}"
+    echo -e "${YELLOW}Ultimi 50 righe del log:${NC}"
+    tail -n 50 /tmp/npm_install.log
+    echo ""
+    echo -e "${YELLOW}Log completo: /tmp/npm_install.log${NC}"
     exit 1
 fi
 
