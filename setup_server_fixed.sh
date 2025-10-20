@@ -20,7 +20,7 @@ MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║   Setup Server Ingresso/Uscita v1.1.6                ║${NC}"
+echo -e "${BLUE}║   Setup Server Ingresso/Uscita v1.1.7                ║${NC}"
 echo -e "${BLUE}║   Raspberry Pi 5 / Linux ARM64/x64                   ║${NC}"
 echo -e "${BLUE}║   Con Audit Trail + Report Excel + Email            ║${NC}"
 echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
@@ -176,7 +176,8 @@ echo -e "${BLUE}Questo passaggio può richiedere 5-10 minuti su Raspberry Pi...$
 echo -e "${BLUE}Potrebbero apparire warning deprecation, è normale.${NC}"
 echo ""
 
-npm install
+# Esegui npm install saltando dipendenze opzionali (es. fsevents per macOS)
+npm install --no-optional
 
 echo ""
 echo -e "${GREEN}✓ Installazione npm completata${NC}"
