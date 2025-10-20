@@ -326,6 +326,43 @@ Il file `setup_server_fixed.sh` è stato aggiornato nel repository:
 https://github.com/fragarray/ingresso_uscita/blob/main/setup_server_fixed.sh
 ```
 
+### Aggiornamenti Versione 1.1.4
+**Data**: 20 Ottobre 2025
+
+#### Fix Aggiuntivo: npm install bloccato
+Durante i test è emerso un secondo problema: il comando `npm install` si bloccava quando eseguito tramite `curl | bash`.
+
+**Problema**:
+```bash
+if npm install --quiet --no-progress 2>&1 | tee /tmp/npm_install.log | grep -E "ERR!|warn"; then
+```
+
+- Il pipe con `grep` bloccava l'output fino alla fine del comando
+- L'utente non vedeva alcun feedback durante l'installazione (5-10 minuti)
+- Sembrava che lo script si fosse bloccato
+
+**Soluzione**:
+```bash
+echo -e "${YELLOW}Installazione in corso... (potrebbero apparire warning, è normale)${NC}"
+npm install 2>&1 | tee /tmp/npm_install.log
+NPM_EXIT_CODE=${PIPESTATUS[0]}
+
+if [ $NPM_EXIT_CODE -ne 0 ]; then
+    echo -e "${RED}✗ Errore durante l'installazione npm${NC}"
+    echo -e "${YELLOW}Controlla il log: /tmp/npm_install.log${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Installazione npm completata${NC}"
+```
+
+**Vantaggi**:
+- ✅ Output in tempo reale durante l'installazione
+- ✅ L'utente vede i warning npm man mano che appaiono
+- ✅ Salva comunque il log completo in `/tmp/npm_install.log`
+- ✅ Controlla l'exit code con `${PIPESTATUS[0]}`
+- ✅ Esce con errore chiaro se npm fallisce
+
 ### Come Usare la Versione Aggiornata
 ```bash
 # Su Raspberry Pi, esegui:
