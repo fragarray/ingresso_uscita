@@ -104,7 +104,7 @@ PROJECT_DIR="$HOME/ingresso_uscita_server"
 
 if [ -d "$PROJECT_DIR" ]; then
     echo -e "${YELLOW}⚠ La directory $PROJECT_DIR esiste già${NC}"
-    read -p "Sovrascrivere? (s/n) " -n 1 -r
+    read -p "Sovrascrivere? (s/n) " -n 1 -r < /dev/tty
     echo
     if [[ $REPLY =~ ^[Ss]$ ]]; then
         echo -e "${YELLOW}Backup della directory esistente...${NC}"
@@ -468,14 +468,14 @@ EOF
     echo -e "   ${GREEN}sudo journalctl -u ${SERVICE_NAME} --since today${NC}   ${BLUE}# Log di oggi${NC}"
     echo ""
     
-    read -p "$(echo -e ${YELLOW}Vuoi abilitare l\'avvio automatico? [s/N] ${NC})" -n 1 -r
+    read -p "$(echo -e ${YELLOW}Vuoi abilitare l\'avvio automatico? [s/N] ${NC})" -n 1 -r < /dev/tty
     echo
     if [[ $REPLY =~ ^[Ss]$ ]]; then
         sudo systemctl enable "$SERVICE_NAME"
         echo -e "${GREEN}✓ Avvio automatico abilitato${NC}"
     fi
     
-    read -p "$(echo -e ${YELLOW}Vuoi avviare il server ora? [s/N] ${NC})" -n 1 -r
+    read -p "$(echo -e ${YELLOW}Vuoi avviare il server ora? [s/N] ${NC})" -n 1 -r < /dev/tty
     echo
     if [[ $REPLY =~ ^[Ss]$ ]]; then
         sudo systemctl start "$SERVICE_NAME"
@@ -497,7 +497,7 @@ echo -e "${GREEN}2)${NC} PM2 (process manager con monitoraggio)"
 echo -e "${GREEN}3)${NC} Avvio manuale (node server.js)"
 echo -e "${GREEN}4)${NC} Nessuno (configuro dopo)"
 echo ""
-read -p "$(echo -e ${YELLOW}Scelta [1-4]: ${NC})" CHOICE
+read -p "$(echo -e ${YELLOW}Scelta [1-4]: ${NC})" CHOICE < /dev/tty
 
 case $CHOICE in
     1)
@@ -512,7 +512,7 @@ case $CHOICE in
             echo -e "${GREEN}✓ PM2 già installato${NC}"
         fi
         
-        read -p "$(echo -e ${YELLOW}Vuoi avviare il server con PM2 ora? [s/N] ${NC})" -n 1 -r
+        read -p "$(echo -e ${YELLOW}Vuoi avviare il server con PM2 ora? [s/N] ${NC})" -n 1 -r < /dev/tty
         echo
         if [[ $REPLY =~ ^[Ss]$ ]]; then
             cd "$PROJECT_DIR"
@@ -520,7 +520,7 @@ case $CHOICE in
             pm2 save
             echo -e "${GREEN}✓ Server avviato con PM2${NC}"
             
-            read -p "$(echo -e ${YELLOW}Vuoi configurare l\'avvio automatico con PM2? [s/N] ${NC})" -n 1 -r
+            read -p "$(echo -e ${YELLOW}Vuoi configurare l\'avvio automatico con PM2? [s/N] ${NC})" -n 1 -r < /dev/tty
             echo
             if [[ $REPLY =~ ^[Ss]$ ]]; then
                 pm2 startup
