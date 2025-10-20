@@ -14,15 +14,17 @@ class AddEmployeeDialog extends StatefulWidget {
 class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
+  final _usernameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
-  bool _isAdmin = false;
+  EmployeeRole _selectedRole = EmployeeRole.employee;
   bool _allowNightShift = false;
 
   @override
   void dispose() {
     _nameController.dispose();
+    _usernameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -36,9 +38,10 @@ class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
     try {
       final newEmployee = Employee(
         name: _nameController.text.trim(),
-        email: _emailController.text.trim(),
+        username: _usernameController.text.trim(),
+        email: _emailController.text.trim().isEmpty ? null : _emailController.text.trim(),
         password: _passwordController.text,
-        isAdmin: _isAdmin,
+        role: _selectedRole,
         allowNightShift: _allowNightShift,
       );
 
@@ -60,7 +63,7 @@ class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Errore di connessione al server')),
+        SnackBar(content: Text('Errore: ${e.toString()}')),
       );
     } finally {
       if (mounted) {
@@ -73,79 +76,138 @@ class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Aggiungi Dipendente'),
-      content: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextFormField(
-              controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Nome'),
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Inserire un nome';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _emailController,
-              decoration: const InputDecoration(labelText: 'Email'),
-              keyboardType: TextInputType.emailAddress,
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Inserire una email';
-                }
-                if (!value.contains('@')) {
-                  return 'Inserire una email valida';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _passwordController,
-              decoration: const InputDecoration(
-                labelText: 'Password',
-                helperText: 'Minimo 6 caratteri',
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Nome completo',
+                  prefixIcon: Icon(Icons.person),
+                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Inserire un nome';
+                  }
+                  return null;
+                },
               ),
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Inserire una password';
-                }
-                if (value.length < 6) {
-                  return 'La password deve essere di almeno 6 caratteri';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 8),
-            CheckboxListTile(
-              title: const Text('Crea come Admin'),
-              subtitle: const Text('L\'utente avrà accesso amministrativo'),
-              value: _isAdmin,
-              onChanged: (value) {
-                setState(() {
-                  _isAdmin = value ?? false;
-                });
-              },
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-            ),
-            CheckboxListTile(
-              title: const Text('Autorizza turni notturni'),
-              subtitle: const Text('Può lavorare oltre la mezzanotte (no auto-logout)'),
-              value: _allowNightShift,
-              onChanged: (value) {
-                setState(() {
-                  _allowNightShift = value ?? false;
-                });
-              },
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-            ),
-          ],
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _usernameController,
+                decoration: const InputDecoration(
+                  labelText: 'Username (per login)',
+                  prefixIcon: Icon(Icons.account_circle),
+                  helperText: 'Univoco, solo lettere, numeri e underscore',
+                ),
+                autocorrect: false,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Inserire un username';
+                  }
+                  if (!RegExp(r'^[a-zA-Z0-9_]+$').hasMatch(value)) {
+                    return 'Solo lettere, numeri e underscore';
+                  }
+                  if (value.length < 3) {
+                    return 'Minimo 3 caratteri';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _emailController,
+                decoration: InputDecoration(
+                  labelText: _selectedRole == EmployeeRole.admin 
+                      ? 'Email (obbligatoria per admin)' 
+                      : 'Email (opzionale)',
+                  prefixIcon: const Icon(Icons.email),
+                  helperText: _selectedRole == EmployeeRole.admin
+                      ? 'Richiesta per invio report'
+                      : 'Opzionale per dipendenti',
+                ),
+                keyboardType: TextInputType.emailAddress,
+                validator: (value) {
+                  // Email obbligatoria solo per admin
+                  if (_selectedRole == EmployeeRole.admin) {
+                    if (value == null || value.isEmpty) {
+                      return 'Email obbligatoria per amministratori';
+                    }
+                    if (!value.contains('@')) {
+                      return 'Inserire una email valida';
+                    }
+                  } else if (value != null && value.isNotEmpty && !value.contains('@')) {
+                    // Se fornita per dipendente, deve essere valida
+                    return 'Inserire una email valida';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _passwordController,
+                decoration: const InputDecoration(
+                  labelText: 'Password',
+                  prefixIcon: Icon(Icons.lock),
+                  helperText: 'Minimo 6 caratteri',
+                ),
+                obscureText: true,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Inserire una password';
+                  }
+                  if (value.length < 6) {
+                    return 'La password deve essere di almeno 6 caratteri';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+              DropdownButtonFormField<EmployeeRole>(
+                value: _selectedRole,
+                decoration: const InputDecoration(
+                  labelText: 'Ruolo',
+                  prefixIcon: Icon(Icons.badge),
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: EmployeeRole.employee,
+                    child: Text('👷 Dipendente'),
+                  ),
+                  DropdownMenuItem(
+                    value: EmployeeRole.foreman,
+                    child: Text('👷‍♂️ Capocantiere'),
+                  ),
+                  DropdownMenuItem(
+                    value: EmployeeRole.admin,
+                    child: Text('👨‍💼 Amministratore'),
+                  ),
+                ],
+                onChanged: (value) {
+                  setState(() {
+                    _selectedRole = value ?? EmployeeRole.employee;
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                title: const Text('Autorizza turni notturni'),
+                subtitle: const Text('Può lavorare oltre la mezzanotte (no auto-logout)'),
+                value: _allowNightShift,
+                onChanged: (value) {
+                  setState(() {
+                    _allowNightShift = value ?? false;
+                  });
+                },
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ],
+          ),
         ),
       ),
       actions: [

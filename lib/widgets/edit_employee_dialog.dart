@@ -19,10 +19,11 @@ class EditEmployeeDialog extends StatefulWidget {
 class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _nameController;
+  late TextEditingController _usernameController;
   late TextEditingController _emailController;
   late TextEditingController _passwordController;
   bool _isLoading = false;
-  late bool _isAdmin;
+  late EmployeeRole _selectedRole;
   late bool _allowNightShift;
   bool _changePassword = false;
 
@@ -30,15 +31,17 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.employee.name);
-    _emailController = TextEditingController(text: widget.employee.email);
+    _usernameController = TextEditingController(text: widget.employee.username);
+    _emailController = TextEditingController(text: widget.employee.email ?? '');
     _passwordController = TextEditingController();
-    _isAdmin = widget.employee.isAdmin;
+    _selectedRole = widget.employee.role;
     _allowNightShift = widget.employee.allowNightShift;
   }
 
   @override
   void dispose() {
     _nameController.dispose();
+    _usernameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -53,9 +56,10 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
       final updatedEmployee = Employee(
         id: widget.employee.id,
         name: _nameController.text.trim(),
-        email: _emailController.text.trim(),
+        username: _usernameController.text.trim(),
+        email: _emailController.text.trim().isEmpty ? null : _emailController.text.trim(),
         password: _changePassword ? _passwordController.text : null,
-        isAdmin: _isAdmin,
+        role: _selectedRole,
         allowNightShift: _allowNightShift,
       );
 
@@ -77,7 +81,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Errore di connessione al server')),
+        SnackBar(content: Text('Errore: ${e.toString()}')),
       );
     } finally {
       if (mounted) {
@@ -124,7 +128,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
               TextFormField(
                 controller: _nameController,
                 decoration: const InputDecoration(
-                  labelText: 'Nome',
+                  labelText: 'Nome completo',
                   prefixIcon: Icon(Icons.person),
                   border: OutlineInputBorder(),
                 ),
@@ -137,20 +141,45 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
               ),
               const SizedBox(height: 16),
               
-              // Email
+              // Username (read-only dopo creazione)
+              TextFormField(
+                controller: _usernameController,
+                decoration: const InputDecoration(
+                  labelText: 'Username',
+                  prefixIcon: Icon(Icons.account_circle),
+                  border: OutlineInputBorder(),
+                  helperText: 'Username non modificabile dopo creazione',
+                ),
+                enabled: false, // Username non modificabile
+                style: TextStyle(color: Colors.grey[700]),
+              ),
+              const SizedBox(height: 16),
+              
+              // Email (opzionale, obbligatoria solo per admin)
               TextFormField(
                 controller: _emailController,
-                decoration: const InputDecoration(
-                  labelText: 'Email',
-                  prefixIcon: Icon(Icons.email),
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: _selectedRole == EmployeeRole.admin 
+                      ? 'Email (obbligatoria per admin)' 
+                      : 'Email (opzionale)',
+                  prefixIcon: const Icon(Icons.email),
+                  border: const OutlineInputBorder(),
+                  helperText: _selectedRole == EmployeeRole.admin
+                      ? 'Richiesta per invio report'
+                      : 'Opzionale per dipendenti',
                 ),
                 keyboardType: TextInputType.emailAddress,
                 validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Inserire una email';
-                  }
-                  if (!value.contains('@')) {
+                  // Email obbligatoria solo per admin
+                  if (_selectedRole == EmployeeRole.admin) {
+                    if (value == null || value.isEmpty) {
+                      return 'Email obbligatoria per amministratori';
+                    }
+                    if (!value.contains('@')) {
+                      return 'Inserire una email valida';
+                    }
+                  } else if (value != null && value.isNotEmpty && !value.contains('@')) {
+                    // Se fornita per dipendente, deve essere valida
                     return 'Inserire una email valida';
                   }
                   return null;
@@ -201,20 +230,35 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
               
               const SizedBox(height: 16),
               
-              // Checkbox Admin
-              CheckboxListTile(
-                title: const Text('Utente Admin'),
-                subtitle: const Text('L\'utente avrà accesso amministrativo'),
-                value: _isAdmin,
+              // Dropdown Ruolo
+              DropdownButtonFormField<EmployeeRole>(
+                value: _selectedRole,
+                decoration: const InputDecoration(
+                  labelText: 'Ruolo',
+                  prefixIcon: Icon(Icons.badge),
+                  border: OutlineInputBorder(),
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: EmployeeRole.employee,
+                    child: Text('👷 Dipendente'),
+                  ),
+                  DropdownMenuItem(
+                    value: EmployeeRole.foreman,
+                    child: Text('👷‍♂️ Capocantiere'),
+                  ),
+                  DropdownMenuItem(
+                    value: EmployeeRole.admin,
+                    child: Text('👨‍💼 Amministratore'),
+                  ),
+                ],
                 onChanged: (value) {
                   setState(() {
-                    _isAdmin = value ?? false;
+                    _selectedRole = value ?? EmployeeRole.employee;
                   });
                 },
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                secondary: const Icon(Icons.admin_panel_settings, color: Colors.red),
               ),
+              const SizedBox(height: 16),
               
               // Checkbox turni notturni
               CheckboxListTile(

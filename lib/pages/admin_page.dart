@@ -236,7 +236,7 @@ class _TodayAttendanceTabState extends State<TodayAttendanceTab>
                       final record = _todayAttendance[index];
                       final employee = _employees.firstWhere(
                         (e) => e.id == record.employeeId,
-                        orElse: () => Employee(name: 'Sconosciuto', email: ''),
+                        orElse: () => Employee(name: 'Sconosciuto', username: 'unknown'),
                       );
                       
                       // Trova il cantiere associato

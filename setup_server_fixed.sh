@@ -20,9 +20,9 @@ MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║   Setup Server Ingresso/Uscita v1.1.8                ║${NC}"
+echo -e "${BLUE}║   Setup Server Ingresso/Uscita v1.2.0                ║${NC}"
 echo -e "${BLUE}║   Raspberry Pi 5 / Linux ARM64/x64                   ║${NC}"
-echo -e "${BLUE}║   Con Audit Trail + Report Excel + Email            ║${NC}"
+echo -e "${BLUE}║   Con Audit + Report + Email + Ruoli + Capocantiere ║${NC}"
 echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -151,10 +151,26 @@ fi
 # Sposta i file dalla sottocartella alla root (PRESERVANDO LA STRUTTURA)
 echo -e "${YELLOW}Organizzazione file...${NC}"
 
+# Verifica che la cartella server esista e contenga file
+if [ ! -d "server" ]; then
+    echo -e "${RED}✗ Errore: la cartella server non è stata scaricata${NC}"
+    exit 1
+fi
+
+# Conta i file nella cartella server
+FILE_COUNT=$(find server -type f | wc -l)
+echo -e "${BLUE}File scaricati nella cartella server: ${FILE_COUNT}${NC}"
+
 # Sposta tutti i file e cartelle, preservando la struttura delle sottocartelle
 shopt -s dotglob  # Include file nascosti
 mv server/* . 2>/dev/null || true
 shopt -u dotglob
+
+# Verifica che i file siano stati spostati
+if [ ! -f "server.js" ]; then
+    echo -e "${RED}✗ Errore: file non spostati correttamente${NC}"
+    exit 1
+fi
 
 # Rimuovi cartella server vuota e .git
 rm -rf server .git
@@ -218,6 +234,12 @@ REQUIRED_FILES=(
     "config.js"
 )
 
+OPTIONAL_FILES=(
+    "migrate_username_auth.js"
+    "check_users.js"
+    "fix_timestamps.js"
+)
+
 REQUIRED_DIRS=(
     "routes"
     "backups"
@@ -226,13 +248,22 @@ REQUIRED_DIRS=(
 MISSING_FILES=0
 MISSING_DIRS=0
 
-# Verifica file
+# Verifica file obbligatori
 for file in "${REQUIRED_FILES[@]}"; do
     if [ -f "$file" ]; then
         echo -e "${GREEN}✓ ${file}${NC}"
     else
         echo -e "${RED}✗ ${file} mancante${NC}"
         MISSING_FILES=$((MISSING_FILES + 1))
+    fi
+done
+
+# Verifica file opzionali
+for file in "${OPTIONAL_FILES[@]}"; do
+    if [ -f "$file" ]; then
+        echo -e "${GREEN}✓ ${file}${NC}"
+    else
+        echo -e "${YELLOW}⚠ ${file} opzionale mancante${NC}"
     fi
 done
 
@@ -408,6 +439,9 @@ echo -e "   ${GREEN}node server.js${NC}"
 echo ""
 echo -e "${YELLOW}🔧 Funzionalità Disponibili:${NC}"
 echo -e "   ${GREEN}✓${NC} Gestione timbrature ingresso/uscita"
+echo -e "   ${GREEN}✓${NC} Autenticazione basata su username (no email)"
+echo -e "   ${GREEN}✓${NC} Sistema ruoli: Amministratore, Dipendente, Capocantiere"
+echo -e "   ${GREEN}✓${NC} Pagina dedicata Capocantiere con report cantieri"
 echo -e "   ${GREEN}✓${NC} Timbrature forzate con validazione overlap"
 echo -e "   ${GREEN}✓${NC} Report Excel (Timbrature, Ore, Cantieri)"
 echo -e "   ${GREEN}✓${NC} Audit Trail completo operazioni admin"
@@ -428,7 +462,7 @@ create_systemd_service() {
     # Crea il file di configurazione
     sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
-Description=Server Ingresso/Uscita - Sistema Gestione Presenze v1.1.6
+Description=Server Ingresso/Uscita - Sistema Gestione Presenze v1.2.0
 After=network.target
 
 [Service]
@@ -560,21 +594,53 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 echo -e "${YELLOW}📝 PROSSIMI PASSI:${NC}"
 echo ""
-echo -e "${YELLOW}1. Configura email per report automatici:${NC}"
+echo -e "${YELLOW}1. ${BLUE}(Solo se aggiornamento da versione vecchia)${NC}"
+echo -e "   ${YELLOW}Esegui migrazione autenticazione username:${NC}"
+echo -e "   ${GREEN}cd ${PROJECT_DIR}${NC}"
+echo -e "   ${GREEN}node migrate_username_auth.js${NC}"
+echo -e "   ${BLUE}Questo script:${NC}"
+echo -e "   ${BLUE}  • Crea backup automatico del database${NC}"
+echo -e "   ${BLUE}  • Genera username da email esistenti${NC}"
+echo -e "   ${BLUE}  • Gestisce duplicati con suffisso numerico${NC}"
+echo -e "   ${BLUE}  • Assegna ruoli (admin/employee/foreman)${NC}"
+echo -e "   ${BLUE}  • Rende email opzionale (obbligatoria solo per admin)${NC}"
+echo -e "   ${RED}⚠ NON necessario per nuove installazioni${NC}"
+echo -e "   ${BLUE}Vedi documentazione: CHANGELOG_USERNAME_AUTH.md${NC}"
+echo ""
+echo -e "${YELLOW}2. Configura email per report automatici:${NC}"
 echo -e "   ${GREEN}nano ${PROJECT_DIR}/email_config.json${NC}"
 echo -e "   Vedi guida: ${BLUE}${PROJECT_DIR}/SETUP_EMAIL.md${NC}"
 echo ""
-echo -e "${YELLOW}2. Configura l'app Flutter:${NC}"
+echo -e "${YELLOW}3. Configura l'app Flutter:${NC}"
 echo -e "   • Apri l'app sul dispositivo mobile"
 echo -e "   • Vai in Impostazioni"
 echo -e "   • Inserisci indirizzo server: ${GREEN}${IP_ADDRESS}${NC}"
 echo ""
-echo -e "${YELLOW}3. Verifica connessione:${NC}"
-echo -e "   • Crea un dipendente di test"
-echo -e "   • Prova una timbratura"
-echo -e "   • Verifica che i dati vengano salvati"
+echo -e "${YELLOW}4. Sistema di autenticazione (NUOVO):${NC}"
+echo -e "   • ${MAGENTA}Login ora avviene con USERNAME e PASSWORD${NC}"
+echo -e "   • Ruoli disponibili: Amministratore, Dipendente, Capocantiere"
+echo -e "   • Capocantiere ha accesso a pagina report dedicata"
+echo -e "   • Email opzionale per dipendenti, obbligatoria per admin"
+echo -e "   ${GREEN}• CREDENZIALI ADMIN DI DEFAULT (nuova installazione):${NC}"
+echo -e "     ${BLUE}Username: admin${NC}"
+echo -e "     ${BLUE}Password: admin123${NC}"
+echo -e "     ${RED}⚠️  Cambia la password al primo accesso!${NC}"
+echo -e "   • Se hai eseguito migrazione, vedi credenziali in CREDENZIALI_MIGRAZIONE.md"
 echo ""
-echo -e "${YELLOW}4. (Opzionale) Configura firewall:${NC}"
+echo -e "${YELLOW}5. Verifica connessione:${NC}"
+echo -e "   • Crea un dipendente di test (con username univoco)"
+echo -e "   • Prova login con username e password"
+echo -e "   • Verifica routing corretto in base al ruolo"
+echo -e "   • Prova timbratura e verifica salvataggio dati"
+echo ""
+echo -e "${YELLOW}6. Test funzionalità Capocantiere:${NC}"
+echo -e "   • Crea utente con ruolo Capocantiere"
+echo -e "   • Login con credenziali capocantiere"
+echo -e "   • Verifica accesso a report cantieri"
+echo -e "   • Test selezione data singola e range date"
+echo -e "   • Test download report Excel cantiere"
+echo ""
+echo -e "${YELLOW}7. (Opzionale) Configura firewall:${NC}"
 echo -e "   ${GREEN}sudo ufw allow 3000/tcp${NC}"
 echo ""
 echo -e "${GREEN}✨ Setup completato! Buon lavoro! ✨${NC}"

@@ -10,7 +10,7 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _isLoading = false;
   bool _obscurePassword = true;
@@ -27,13 +27,13 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _loadSavedCredentials() async {
     final prefs = await SharedPreferences.getInstance();
-    final savedEmail = prefs.getString('saved_email');
+    final savedUsername = prefs.getString('saved_username');
     final savedPassword = prefs.getString('saved_password');
     final rememberMe = prefs.getBool('remember_me') ?? false;
 
-    if (rememberMe && savedEmail != null && savedPassword != null) {
+    if (rememberMe && savedUsername != null && savedPassword != null) {
       setState(() {
-        _emailController.text = savedEmail;
+        _usernameController.text = savedUsername;
         _passwordController.text = savedPassword;
         _rememberMe = true;
       });
@@ -43,14 +43,14 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _attemptAutoLogin() async {
     final prefs = await SharedPreferences.getInstance();
     final autoLogin = prefs.getBool('auto_login') ?? false;
-    final savedEmail = prefs.getString('saved_email');
+    final savedUsername = prefs.getString('saved_username');
     final savedPassword = prefs.getString('saved_password');
 
-    if (autoLogin && savedEmail != null && savedPassword != null) {
+    if (autoLogin && savedUsername != null && savedPassword != null) {
       setState(() => _isAutoLoggingIn = true);
 
       try {
-        final employee = await ApiService.login(savedEmail, savedPassword);
+        final employee = await ApiService.login(savedUsername, savedPassword);
         
         if (employee != null && mounted) {
           context.read<AppState>().setEmployee(employee);
@@ -102,12 +102,12 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _login() async {
-    final email = _emailController.text.trim();
+    final username = _usernameController.text.trim();
     final password = _passwordController.text;
 
-    if (email.isEmpty || password.isEmpty) {
+    if (username.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Inserire email e password')),
+        const SnackBar(content: Text('Inserire username e password')),
       );
       return;
     }
@@ -115,18 +115,18 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => _isLoading = true);
     
     try {
-      final employee = await ApiService.login(email, password);
+      final employee = await ApiService.login(username, password);
       
       if (employee != null) {
         // Salva le credenziali se "Ricorda" è attivo
         final prefs = await SharedPreferences.getInstance();
         if (_rememberMe) {
-          await prefs.setString('saved_email', email);
+          await prefs.setString('saved_username', username);
           await prefs.setString('saved_password', password);
           await prefs.setBool('remember_me', true);
           await prefs.setBool('auto_login', true);
         } else {
-          await prefs.remove('saved_email');
+          await prefs.remove('saved_username');
           await prefs.remove('saved_password');
           await prefs.setBool('remember_me', false);
           await prefs.setBool('auto_login', false);
@@ -285,7 +285,7 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   void dispose() {
-    _emailController.dispose();
+    _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
@@ -341,14 +341,15 @@ class _LoginPageState extends State<LoginPage> {
                 ),
                 const SizedBox(height: 20),
               TextField(
-                controller: _emailController,
+                controller: _usernameController,
                 enabled: !_isLoading,
                 decoration: const InputDecoration(
-                  labelText: 'Email',
+                  labelText: 'Username',
                   border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.email),
+                  prefixIcon: Icon(Icons.person),
                 ),
-                keyboardType: TextInputType.emailAddress,
+                keyboardType: TextInputType.text,
+                autocorrect: false,
               ),
               const SizedBox(height: 20),
               TextField(

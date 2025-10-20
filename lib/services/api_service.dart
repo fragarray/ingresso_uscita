@@ -110,13 +110,13 @@ class ApiService {
     }
   }
 
-  static Future<Employee?> login(String email, String password) async {
+  static Future<Employee?> login(String username, String password) async {
     try {
       final baseUrl = await getBaseUrl();
       final response = await http.post(
         Uri.parse('$baseUrl/login'),
         headers: {'Content-Type': 'application/json'},
-        body: json.encode({'email': email, 'password': password}),
+        body: json.encode({'username': username, 'password': password}),
       );
 
       if (response.statusCode == 200) {
@@ -887,4 +887,104 @@ class ApiService {
       return {'success': false, 'error': e.toString()};
     }
   }
+
+  // ==================== FOREMAN API ====================
+
+  // Ottieni lista dipendenti attualmente timbrati IN per un cantiere
+  static Future<List<Map<String, dynamic>>> getActiveEmployeesForWorkSite(
+    int workSiteId,
+  ) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final response = await http.get(
+        Uri.parse('$baseUrl/foreman/active-employees/$workSiteId'),
+      );
+
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        return data.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (e) {
+      print('Get active employees for worksite error: $e');
+      return [];
+    }
+  }
+
+  // Ottieni storico timbrature per un cantiere (con filtri data opzionali)
+  static Future<List<Map<String, dynamic>>> getWorkSiteHistory({
+    required int workSiteId,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final queryParams = <String, String>{};
+      
+      if (startDate != null) {
+        queryParams['startDate'] = startDate.toIso8601String();
+      }
+      if (endDate != null) {
+        queryParams['endDate'] = endDate.toIso8601String();
+      }
+
+      final uri = Uri.parse('$baseUrl/foreman/worksite-history/$workSiteId')
+          .replace(queryParameters: queryParams);
+
+      final response = await http.get(uri);
+
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        return data.cast<Map<String, dynamic>>();
+      }
+      return [];
+    } catch (e) {
+      print('Get worksite history error: $e');
+      return [];
+    }
+  }
+
+  // Scarica report Excel per cantiere (capocantiere)
+  static Future<String?> downloadForemanWorkSiteReport({
+    required int workSiteId,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final queryParams = <String, String>{};
+      
+      if (startDate != null) {
+        queryParams['startDate'] = startDate.toIso8601String();
+      }
+      if (endDate != null) {
+        queryParams['endDate'] = endDate.toIso8601String();
+      }
+
+      final uri = Uri.parse('$baseUrl/foreman/worksite-report/$workSiteId')
+          .replace(queryParameters: queryParams);
+
+      print('Downloading foreman report: $uri');
+      final response = await http.get(uri);
+
+      if (response.statusCode == 200) {
+        final bytes = response.bodyBytes;
+        final dir = await getApplicationDocumentsDirectory();
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final file = File(
+          '${dir.path}/report_cantiere_capocantiere_$timestamp.xlsx',
+        );
+        await file.writeAsBytes(bytes);
+        print('Foreman report saved: ${file.path}');
+        return file.path;
+      } else {
+        print('Error response: ${response.statusCode} - ${response.body}');
+      }
+      return null;
+    } catch (e) {
+      print('Download foreman worksite report error: $e');
+      return null;
+    }
+  }
 }
+

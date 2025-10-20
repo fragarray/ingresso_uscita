@@ -48,7 +48,8 @@ class _ReportsTabState extends State<ReportsTab> {
       } else {
         _filteredEmployees = _employees.where((emp) {
           return emp.name.toLowerCase().contains(query) ||
-              emp.email.toLowerCase().contains(query);
+              (emp.email?.toLowerCase().contains(query) ?? false) ||
+              emp.username.toLowerCase().contains(query);
         }).toList();
       }
     });

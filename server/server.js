@@ -106,20 +106,39 @@ app.get('/api/ping', (req, res) => {
 });
 
 // Insert default admin if not exists (after db initialization)
+// AGGIORNATO per nuovo schema con username e role
+// Timeout aumentato a 2000ms per assicurare che tutte le colonne siano state create
 setTimeout(() => {
-  db.get("SELECT * FROM employees WHERE email = 'admin@example.com'", (err, row) => {
+  db.get("SELECT * FROM employees WHERE username = 'admin' OR email = 'admin@example.com'", (err, row) => {
+    if (err) {
+      console.error('❌ Errore verifica admin esistente:', err.message);
+      return;
+    }
+    
     if (!row) {
-      db.run(`INSERT INTO employees (name, email, password, isAdmin) VALUES (?, ?, ?, ?)`,
-        ['Admin', 'admin@example.com', 'admin123', 1], (err) => {
+      console.log('🔧 Creazione utente amministratore di default...');
+      db.run(
+        `INSERT INTO employees (name, username, email, password, isAdmin, role, isActive) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        ['Admin', 'admin', 'admin@example.com', 'admin123', 1, 'admin', 1], 
+        (err) => {
           if (err) {
-            console.error('Error creating admin:', err);
+            console.error('❌ Errore creazione admin:', err.message);
+            console.log('💡 Suggerimento: Verifica che la tabella employees abbia tutte le colonne necessarie');
           } else {
-            console.log('Admin user created');
+            console.log('✅ Utente amministratore creato con successo!');
+            console.log('📋 Credenziali di default:');
+            console.log('   Username: admin');
+            console.log('   Password: admin123');
+            console.log('   Email: admin@example.com');
+            console.log('⚠️  IMPORTANTE: Cambia la password al primo accesso!');
           }
-        });
+        }
+      );
+    } else {
+      console.log('ℹ️  Utente amministratore già presente nel database');
     }
   });
-}, 1000);
+}, 2000);
 
 // ==================== AUTO-TIMBRATURA USCITA A MEZZANOTTE ====================
 
@@ -591,24 +610,29 @@ app.put('/api/settings/:key', (req, res) => {
 
 // Routes
 app.post('/api/login', (req, res) => {
-  const { email, password } = req.body;
-  console.log(`🔐 [LOGIN] Tentativo di login per: ${email}`);
+  const { username, email, password } = req.body;
   
-  db.get('SELECT * FROM employees WHERE email = ? AND password = ?', [email, password], (err, row) => {
+  // Supporta sia username (nuovo) che email (legacy per compatibilità durante migrazione)
+  const loginIdentifier = username || email;
+  const loginField = username ? 'username' : 'email';
+  
+  console.log(`🔐 [LOGIN] Tentativo di login con ${loginField}: ${loginIdentifier}`);
+  
+  db.get(`SELECT * FROM employees WHERE ${loginField} = ? AND password = ?`, [loginIdentifier, password], (err, row) => {
     if (err) {
       console.error(`❌ [LOGIN] Errore database:`, err.message);
       res.status(500).json({ error: err.message });
       return;
     }
     if (!row) {
-      console.log(`⛔ [LOGIN] Credenziali non valide per: ${email}`);
+      console.log(`⛔ [LOGIN] Credenziali non valide per: ${loginIdentifier}`);
       res.status(401).json({ error: 'Credenziali non valide' });
       return;
     }
     
     // ⚠️ VALIDAZIONE CRITICA: Controlla se l'account è stato eliminato (soft delete)
-    if (row.deleted === 1) {
-      console.log(`🚫 [LOGIN] Account eliminato - ID: ${row.id}, Nome: ${row.name}, Email: ${email}`);
+    if (row.deleted === 1 || row.isActive === 0) {
+      console.log(`🚫 [LOGIN] Account disattivato - ID: ${row.id}, Nome: ${row.name}, Username: ${row.username}`);
       res.status(403).json({ 
         error: 'Account non più attivo',
         message: 'Questo account è stato disattivato. Contatta l\'amministratore per maggiori informazioni.'
@@ -616,7 +640,12 @@ app.post('/api/login', (req, res) => {
       return;
     }
     
-    console.log(`✅ [LOGIN] Login riuscito - ID: ${row.id}, Nome: ${row.name}, Admin: ${row.isAdmin ? 'Sì' : 'No'}`);
+    // Determina ruolo per logging
+    const roleDisplay = row.role === 'admin' ? 'Amministratore' 
+                      : row.role === 'foreman' ? 'Capocantiere' 
+                      : 'Dipendente';
+    
+    console.log(`✅ [LOGIN] Login riuscito - ID: ${row.id}, Nome: ${row.name}, Ruolo: ${roleDisplay}`);
     
     // Non inviare la password al client
     const { password: _, ...employeeWithoutPassword } = row;
@@ -1242,55 +1271,124 @@ app.get('/api/employees', (req, res) => {
 });
 
 app.post('/api/employees', (req, res) => {
-  const { name, email, password, isAdmin, allowNightShift } = req.body;
-  const isAdminValue = isAdmin === 1 || isAdmin === true ? 1 : 0;
+  const { name, username, email, password, isAdmin, role, allowNightShift } = req.body;
+  
+  // Validazione username (obbligatorio)
+  if (!username || username.trim().length === 0) {
+    console.error(`❌ [DIPENDENTE] Username obbligatorio`);
+    return res.status(400).json({ error: 'Username obbligatorio' });
+  }
+  
+  // Determina ruolo (priorità: role > isAdmin)
+  let employeeRole = 'employee'; // Default
+  if (role) {
+    // Valida ruolo
+    if (['admin', 'employee', 'foreman'].includes(role)) {
+      employeeRole = role;
+    } else {
+      console.error(`❌ [DIPENDENTE] Ruolo non valido: ${role}`);
+      return res.status(400).json({ error: 'Ruolo non valido. Usare: admin, employee, foreman' });
+    }
+  } else if (isAdmin === 1 || isAdmin === true) {
+    employeeRole = 'admin';
+  }
+  
+  // Valida email obbligatoria per admin
+  if (employeeRole === 'admin' && (!email || email.trim().length === 0)) {
+    console.error(`❌ [DIPENDENTE] Email obbligatoria per amministratori`);
+    return res.status(400).json({ error: 'Email obbligatoria per amministratori (per report)' });
+  }
+  
+  const isAdminValue = employeeRole === 'admin' ? 1 : 0;
   const allowNightShiftValue = allowNightShift === 1 || allowNightShift === true ? 1 : 0;
   
   console.log(`➕ [DIPENDENTE] Creazione nuovo dipendente`);
   console.log(`   👤 Nome: ${name}`);
-  console.log(`   📧 Email: ${email}`);
-  console.log(`   👨‍💼 Admin: ${isAdminValue ? 'Sì' : 'No'}`);
+  console.log(`   🆔 Username: ${username}`);
+  console.log(`   � Email: ${email || '(non fornita)'}`);
+  console.log(`   👥 Ruolo: ${employeeRole}`);
   console.log(`   🌙 Turni notturni: ${allowNightShiftValue ? 'Sì' : 'No'}`);
   
-  db.run('INSERT INTO employees (name, email, password, isAdmin, allowNightShift) VALUES (?, ?, ?, ?, ?)',
-    [name, email, password, isAdminValue, allowNightShiftValue],
+  // Query con username e role
+  db.run(
+    'INSERT INTO employees (name, username, email, password, isAdmin, role, allowNightShift) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [name, username, email || null, password, isAdminValue, employeeRole, allowNightShiftValue],
     function(err) {
       if (err) {
-        console.error(`❌ [DIPENDENTE] Errore creazione:`, err.message);
-        res.status(500).json({ error: err.message });
+        if (err.message.includes('UNIQUE constraint failed: employees.username')) {
+          console.error(`❌ [DIPENDENTE] Username già esistente: ${username}`);
+          res.status(400).json({ error: 'Username già esistente' });
+        } else {
+          console.error(`❌ [DIPENDENTE] Errore creazione:`, err.message);
+          res.status(500).json({ error: err.message });
+        }
         return;
       }
       console.log(`✅ [DIPENDENTE] Creato con successo - ID: ${this.lastID}`);
       res.json({ id: this.lastID });
-    });
+    }
+  );
 });
 
 app.put('/api/employees/:id', (req, res) => {
-  const { name, email, password, isAdmin, allowNightShift } = req.body;
-  const isAdminValue = isAdmin === 1 || isAdmin === true ? 1 : 0;
+  const { name, username, email, password, isAdmin, role, allowNightShift } = req.body;
+  
+  // Validazione username (obbligatorio)
+  if (!username || username.trim().length === 0) {
+    console.error(`❌ [DIPENDENTE] Username obbligatorio`);
+    return res.status(400).json({ error: 'Username obbligatorio' });
+  }
+  
+  // Determina ruolo (priorità: role > isAdmin)
+  let employeeRole = 'employee'; // Default
+  if (role) {
+    // Valida ruolo
+    if (['admin', 'employee', 'foreman'].includes(role)) {
+      employeeRole = role;
+    } else {
+      console.error(`❌ [DIPENDENTE] Ruolo non valido: ${role}`);
+      return res.status(400).json({ error: 'Ruolo non valido. Usare: admin, employee, foreman' });
+    }
+  } else if (isAdmin === 1 || isAdmin === true) {
+    employeeRole = 'admin';
+  }
+  
+  // Valida email obbligatoria per admin
+  if (employeeRole === 'admin' && (!email || email.trim().length === 0)) {
+    console.error(`❌ [DIPENDENTE] Email obbligatoria per amministratori`);
+    return res.status(400).json({ error: 'Email obbligatoria per amministratori (per report)' });
+  }
+  
+  const isAdminValue = employeeRole === 'admin' ? 1 : 0;
   const allowNightShiftValue = allowNightShift === 1 || allowNightShift === true ? 1 : 0;
   
   console.log(`✏️  [DIPENDENTE] Aggiornamento dipendente ID: ${req.params.id}`);
   console.log(`   👤 Nome: ${name}`);
-  console.log(`   📧 Email: ${email}`);
-  console.log(`   👨‍💼 Admin: ${isAdminValue ? 'Sì' : 'No'}`);
+  console.log(`   🆔 Username: ${username}`);
+  console.log(`   � Email: ${email || '(non fornita)'}`);
+  console.log(`   👥 Ruolo: ${employeeRole}`);
   console.log(`   🌙 Turni notturni: ${allowNightShiftValue ? 'Sì' : 'No'}`);
   console.log(`   🔑 Password: ${password && password.length > 0 ? 'Aggiornata' : 'Non modificata'}`);
   
   // Se la password è fornita, aggiorniamo anche quella
   let query, params;
   if (password && password.length > 0) {
-    query = 'UPDATE employees SET name = ?, email = ?, password = ?, isAdmin = ?, allowNightShift = ? WHERE id = ?';
-    params = [name, email, password, isAdminValue, allowNightShiftValue, req.params.id];
+    query = 'UPDATE employees SET name = ?, username = ?, email = ?, password = ?, isAdmin = ?, role = ?, allowNightShift = ? WHERE id = ?';
+    params = [name, username, email || null, password, isAdminValue, employeeRole, allowNightShiftValue, req.params.id];
   } else {
-    query = 'UPDATE employees SET name = ?, email = ?, isAdmin = ?, allowNightShift = ? WHERE id = ?';
-    params = [name, email, isAdminValue, allowNightShiftValue, req.params.id];
+    query = 'UPDATE employees SET name = ?, username = ?, email = ?, isAdmin = ?, role = ?, allowNightShift = ? WHERE id = ?';
+    params = [name, username, email || null, isAdminValue, employeeRole, allowNightShiftValue, req.params.id];
   }
   
   db.run(query, params, function(err) {
     if (err) {
-      console.error(`❌ [DIPENDENTE] Errore aggiornamento:`, err.message);
-      res.status(500).json({ error: err.message });
+      if (err.message.includes('UNIQUE constraint failed: employees.username')) {
+        console.error(`❌ [DIPENDENTE] Username già esistente: ${username}`);
+        res.status(400).json({ error: 'Username già esistente' });
+      } else {
+        console.error(`❌ [DIPENDENTE] Errore aggiornamento:`, err.message);
+        res.status(500).json({ error: err.message });
+      }
       return;
     }
     console.log(`✅ [DIPENDENTE] Aggiornato con successo - Righe modificate: ${this.changes}`);
@@ -3115,6 +3213,269 @@ app.get('/api/worksite/report', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ==================== FOREMAN API ====================
+
+// GET /api/foreman/active-employees/:workSiteId
+// Ottiene la lista dei dipendenti attualmente timbrati IN per un cantiere specifico
+app.get('/api/foreman/active-employees/:workSiteId', (req, res) => {
+  const { workSiteId } = req.params;
+  
+  console.log(`👷 [FOREMAN] Richiesta dipendenti attivi per cantiere ID: ${workSiteId}`);
+  
+  // Query per trovare dipendenti con l'ultima timbratura di tipo 'in' per questo cantiere
+  const query = `
+    SELECT 
+      e.id as employeeId,
+      e.name as employeeName,
+      ar.timestamp,
+      ar.type,
+      ar.workSiteId
+    FROM employees e
+    INNER JOIN (
+      -- Trova l'ultima timbratura per ogni dipendente su questo cantiere
+      SELECT 
+        employeeId,
+        MAX(timestamp) as lastTimestamp
+      FROM attendance_records
+      WHERE workSiteId = ?
+      GROUP BY employeeId
+    ) latest ON e.id = latest.employeeId
+    INNER JOIN attendance_records ar 
+      ON ar.employeeId = latest.employeeId 
+      AND ar.timestamp = latest.lastTimestamp
+      AND ar.workSiteId = ?
+    WHERE ar.type = 'in'
+      AND e.isActive = 1
+    ORDER BY e.name ASC
+  `;
+  
+  db.all(query, [workSiteId, workSiteId], (err, rows) => {
+    if (err) {
+      console.error(`❌ [FOREMAN] Errore query dipendenti attivi:`, err.message);
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    
+    console.log(`✅ [FOREMAN] Trovati ${rows.length} dipendenti attivi sul cantiere ${workSiteId}`);
+    res.json(rows);
+  });
+});
+
+// GET /api/foreman/worksite-history/:workSiteId
+// Ottiene lo storico completo delle timbrature per un cantiere (con filtri data opzionali)
+app.get('/api/foreman/worksite-history/:workSiteId', (req, res) => {
+  const { workSiteId } = req.params;
+  let { startDate, endDate } = req.query;
+  
+  console.log(`📋 [FOREMAN] Richiesta storico cantiere ID: ${workSiteId}`);
+  if (startDate) console.log(`   📅 Data inizio: ${startDate}`);
+  if (endDate) console.log(`   📅 Data fine (ricevuta): ${endDate}`);
+  
+  // Se endDate è fornita, estendila alla fine della giornata (23:59:59.999)
+  // per includere tutte le timbrature di quel giorno
+  if (endDate) {
+    const endDateObj = new Date(endDate);
+    endDateObj.setHours(23, 59, 59, 999);
+    endDate = endDateObj.toISOString();
+    console.log(`   📅 Data fine (corretta): ${endDate}`);
+  }
+  
+  let query = `
+    SELECT 
+      ar.id,
+      ar.employeeId,
+      ar.workSiteId,
+      ar.timestamp,
+      ar.type,
+      ar.isForced,
+      ar.notes,
+      COALESCE(e.name, '[DIPENDENTE ELIMINATO #' || ar.employeeId || ']') as employeeName,
+      e.isActive as employeeIsActive
+    FROM attendance_records ar
+    LEFT JOIN employees e ON ar.employeeId = e.id
+    WHERE ar.workSiteId = ?
+  `;
+  
+  const params = [workSiteId];
+  
+  if (startDate) {
+    query += ' AND ar.timestamp >= ?';
+    params.push(startDate);
+  }
+  
+  if (endDate) {
+    query += ' AND ar.timestamp <= ?';
+    params.push(endDate);
+  }
+  
+  query += ' ORDER BY ar.timestamp DESC';
+  
+  db.all(query, params, (err, rows) => {
+    if (err) {
+      console.error(`❌ [FOREMAN] Errore query storico:`, err.message);
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    
+    console.log(`✅ [FOREMAN] Trovate ${rows.length} timbrature nello storico`);
+    res.json(rows);
+  });
+});
+
+// GET /api/foreman/worksite-report/:workSiteId
+// Genera e scarica report Excel per capocantiere (storico cantiere)
+app.get('/api/foreman/worksite-report/:workSiteId', async (req, res) => {
+  const { workSiteId } = req.params;
+  let { startDate, endDate } = req.query;
+  
+  console.log(`📊 [FOREMAN] Generazione report Excel per cantiere ID: ${workSiteId}`);
+  if (startDate) console.log(`   📅 Data inizio: ${startDate}`);
+  if (endDate) console.log(`   📅 Data fine (ricevuta): ${endDate}`);
+  
+  // Se endDate è fornita, estendila alla fine della giornata (23:59:59.999)
+  // per includere tutte le timbrature di quel giorno
+  if (endDate) {
+    const endDateObj = new Date(endDate);
+    endDateObj.setHours(23, 59, 59, 999);
+    endDate = endDateObj.toISOString();
+    console.log(`   📅 Data fine (corretta): ${endDate}`);
+  }
+  
+  try {
+    // Recupera informazioni cantiere
+    const workSite = await new Promise((resolve, reject) => {
+      db.get('SELECT * FROM work_sites WHERE id = ?', [workSiteId], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+    
+    if (!workSite) {
+      return res.status(404).json({ error: 'Cantiere non trovato' });
+    }
+    
+    // Query per recuperare timbrature
+    let query = `
+      SELECT 
+        ar.id,
+        ar.employeeId,
+        ar.timestamp,
+        ar.type,
+        ar.isForced,
+        ar.notes,
+        COALESCE(e.name, '[DIPENDENTE ELIMINATO #' || ar.employeeId || ']') as employeeName,
+        e.isActive as employeeIsActive
+      FROM attendance_records ar
+      LEFT JOIN employees e ON ar.employeeId = e.id
+      WHERE ar.workSiteId = ?
+    `;
+    
+    const params = [workSiteId];
+    
+    if (startDate) {
+      query += ' AND ar.timestamp >= ?';
+      params.push(startDate);
+    }
+    
+    if (endDate) {
+      query += ' AND ar.timestamp <= ?';
+      params.push(endDate);
+    }
+    
+    query += ' ORDER BY ar.timestamp ASC';
+    
+    const records = await new Promise((resolve, reject) => {
+      db.all(query, params, (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+    });
+    
+    // Genera Excel
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Storico Cantiere');
+    
+    // Intestazione
+    worksheet.columns = [
+      { header: 'ID', key: 'id', width: 8 },
+      { header: 'Dipendente', key: 'employeeName', width: 25 },
+      { header: 'Data', key: 'date', width: 12 },
+      { header: 'Ora', key: 'time', width: 10 },
+      { header: 'Tipo', key: 'type', width: 10 },
+      { header: 'Forzata', key: 'isForced', width: 10 },
+      { header: 'Note', key: 'notes', width: 30 },
+    ];
+    
+    // Stile intestazione
+    worksheet.getRow(1).font = { bold: true, size: 12 };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    
+    // Aggiungi dati
+    records.forEach(record => {
+      const timestamp = new Date(record.timestamp);
+      worksheet.addRow({
+        id: record.id,
+        employeeName: record.employeeName,
+        date: timestamp.toLocaleDateString('it-IT'),
+        time: timestamp.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
+        type: record.type === 'in' ? 'ENTRATA' : 'USCITA',
+        isForced: record.isForced ? 'SÌ' : 'NO',
+        notes: record.notes || '',
+      });
+    });
+    
+    // Info cantiere in cima
+    worksheet.insertRow(1, ['Report Cantiere:', workSite.name]);
+    worksheet.insertRow(2, ['Indirizzo:', workSite.address]);
+    worksheet.insertRow(3, ['Periodo:', startDate && endDate 
+      ? `${new Date(startDate).toLocaleDateString('it-IT')} - ${new Date(endDate).toLocaleDateString('it-IT')}`
+      : 'Tutti i record'
+    ]);
+    worksheet.insertRow(4, ['Totale timbrature:', records.length]);
+    worksheet.insertRow(5, []); // Riga vuota
+    
+    worksheet.getRow(1).font = { bold: true, size: 14 };
+    worksheet.getRow(2).font = { italic: true };
+    worksheet.getRow(3).font = { italic: true };
+    worksheet.getRow(4).font = { bold: true };
+    
+    // Salva file temporaneo
+    const tempDir = path.join(__dirname, 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir);
+    }
+    
+    const filename = `report_cantiere_${workSiteId}_${Date.now()}.xlsx`;
+    const filepath = path.join(tempDir, filename);
+    
+    await workbook.xlsx.writeFile(filepath);
+    
+    console.log(`✅ [FOREMAN] Report generato: ${filename}`);
+    
+    // Invia file
+    res.download(filepath, filename, (err) => {
+      if (err) {
+        console.error('Error sending file:', err);
+      }
+      // Elimina file temporaneo dopo l'invio
+      fs.unlink(filepath, (unlinkErr) => {
+        if (unlinkErr) console.error('Error deleting temp file:', unlinkErr);
+      });
+    });
+    
+  } catch (error) {
+    console.error('❌ [FOREMAN] Errore generazione report:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== END FOREMAN API ====================
 
 // ==================== BACKUP DATABASE ====================
 

@@ -5,14 +5,97 @@ const db = new sqlite3.Database(path.join(__dirname, 'database.db'));
 
 // Crea le tabelle se non esistono
 db.serialize(() => {
-  // Tabella employees (già esistente)
+  // Tabella employees con schema completo v1.2.0
+  // Include username, role e tutti i campi necessari
   db.run(`CREATE TABLE IF NOT EXISTS employees (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE,
+    email TEXT,
     password TEXT NOT NULL,
-    isAdmin INTEGER DEFAULT 0
-  )`);
+    isAdmin INTEGER DEFAULT 0,
+    role TEXT DEFAULT 'employee',
+    isActive INTEGER DEFAULT 1,
+    allowNightShift INTEGER DEFAULT 0,
+    deleted INTEGER DEFAULT 0,
+    deletedAt DATETIME,
+    deletedByAdminId INTEGER,
+    FOREIGN KEY (deletedByAdminId) REFERENCES employees (id)
+  )`, (err) => {
+    if (err) {
+      console.error('❌ Error creating employees table:', err.message);
+    } else {
+      console.log('✓ Table employees ready');
+    }
+  });
+  
+  // ==================== MIGRAZIONE COLONNE PER DATABASE ESISTENTI ====================
+  // Questi ALTER TABLE servono solo per database creati con vecchio schema
+  // Se la tabella è nuova, le colonne esistono già e questi comandi non fanno nulla
+  
+  // Aggiungi colonna username (UNIQUE) per autenticazione
+  db.run(`ALTER TABLE employees ADD COLUMN username TEXT UNIQUE`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding username column:', err);
+    } else if (!err) {
+      console.log('✓ Column username added to employees');
+    }
+  });
+  
+  // Aggiungi colonna role per gestire admin/employee/foreman
+  // Values: 'admin', 'employee', 'foreman'
+  db.run(`ALTER TABLE employees ADD COLUMN role TEXT DEFAULT 'employee'`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding role column:', err);
+    } else if (!err) {
+      console.log('✓ Column role added to employees');
+    }
+  });
+  
+  // Aggiungi colonna isActive per soft delete
+  db.run(`ALTER TABLE employees ADD COLUMN isActive INTEGER DEFAULT 1`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding isActive column:', err);
+    } else if (!err) {
+      console.log('✓ Column isActive added to employees');
+    }
+  });
+  
+  // Aggiungi colonna allowNightShift
+  db.run(`ALTER TABLE employees ADD COLUMN allowNightShift INTEGER DEFAULT 0`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding allowNightShift column:', err);
+    } else if (!err) {
+      console.log('✓ Column allowNightShift added to employees');
+    }
+  });
+  
+  // Aggiungi colonna deleted per soft delete
+  db.run(`ALTER TABLE employees ADD COLUMN deleted INTEGER DEFAULT 0`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding deleted column:', err);
+    } else if (!err) {
+      console.log('✓ Column deleted added to employees');
+    }
+  });
+  
+  // Aggiungi colonna deletedAt
+  db.run(`ALTER TABLE employees ADD COLUMN deletedAt DATETIME`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding deletedAt column:', err);
+    } else if (!err) {
+      console.log('✓ Column deletedAt added to employees');
+    }
+  });
+  
+  // Aggiungi colonna deletedByAdminId
+  db.run(`ALTER TABLE employees ADD COLUMN deletedByAdminId INTEGER`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('Error adding deletedByAdminId column:', err);
+    } else if (!err) {
+      console.log('✓ Column deletedByAdminId added to employees');
+    }
+  });
 
   // Tabella attendance_records (già esistente)
   db.run(`CREATE TABLE IF NOT EXISTS attendance_records (

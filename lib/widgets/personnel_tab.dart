@@ -76,7 +76,8 @@ class _PersonnelTabState extends State<PersonnelTab> {
       } else {
         _filteredEmployees = _employees.where((employee) {
           return employee.name.toLowerCase().contains(query) ||
-              employee.email.toLowerCase().contains(query);
+              (employee.email?.toLowerCase().contains(query) ?? false) ||
+              employee.username.toLowerCase().contains(query);
         }).toList();
       }
     });
@@ -3044,7 +3045,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
                                                   ),
                                                   const SizedBox(height: 4),
                                                   Text(
-                                                    employee.email,
+                                                    employee.email ?? 'Nessuna email',
                                                     style: TextStyle(
                                                       color: Colors.grey[600],
                                                       fontSize: 13,
@@ -3437,7 +3438,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          employee.email,
+                          employee.email ?? 'Nessuna email',
                           style: TextStyle(
                             color: Colors.grey[600],
                             fontSize: 12,

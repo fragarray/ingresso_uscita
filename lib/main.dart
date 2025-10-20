@@ -7,6 +7,7 @@ import 'models/employee.dart';
 import 'pages/login_page.dart';
 import 'pages/admin_page.dart';
 import 'pages/employee_page.dart';
+import 'pages/foreman_page.dart';
 import 'services/api_service.dart';
 
 void main() async {
@@ -143,9 +144,18 @@ class MyApp extends StatelessWidget {
           if (appState.currentEmployee == null) {
             return LoginPage();
           }
-          return appState.currentEmployee!.isAdmin
-              ? AdminPage()
-              : EmployeePage();
+          
+          // Routing basato su ruolo
+          final employee = appState.currentEmployee!;
+          
+          switch (employee.role) {
+            case EmployeeRole.admin:
+              return AdminPage();
+            case EmployeeRole.foreman:
+              return ForemanPage();
+            case EmployeeRole.employee:
+              return EmployeePage();
+          }
         },
       ),
     );
