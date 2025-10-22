@@ -3794,7 +3794,7 @@ function validateDatabaseStructure(dbPath) {
       }
       
       // Verifica esistenza tabelle richieste
-      const requiredTables = ['employees', 'work_sites', 'attendance'];
+      const requiredTables = ['employees', 'work_sites', 'attendance_records'];
       let checkedTables = 0;
       
       testDb.serialize(() => {

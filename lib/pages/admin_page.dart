@@ -1218,6 +1218,16 @@ class _SettingsTabState extends State<SettingsTab> {
                     spacing: 8,
                     children: [
                       ChoiceChip(
+                        label: const Text('1 giorno'),
+                        selected: _autoBackupDays == 1,
+                        onSelected: (selected) {
+                          if (selected) {
+                            setState(() => _autoBackupDays = 1);
+                            _saveBackupSettings();
+                          }
+                        },
+                      ),
+                      ChoiceChip(
                         label: const Text('3 giorni'),
                         selected: _autoBackupDays == 3,
                         onSelected: (selected) {
