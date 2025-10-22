@@ -200,11 +200,12 @@ const autoForceCheckout = async () => {
         let processed = 0;
         let failed = 0;
         
-        // Timestamp di mezzanotte (23:59:59 del giorno precedente)
+        // Timestamp di mezzanotte (23:59:59 del giorno APPENA TERMINATO)
+        // Se siamo alle 00:01 del 22 ottobre, usiamo 23:59:59 del 21 ottobre
         const now = new Date();
         const midnight = new Date(now);
-        midnight.setHours(23, 59, 59, 0);
-        midnight.setDate(midnight.getDate() - 1); // Giorno precedente
+        midnight.setDate(midnight.getDate() - 1); // Torna al giorno prima
+        midnight.setHours(23, 59, 59, 999); // Imposta 23:59:59.999
         const midnightTimestamp = midnight.toISOString().slice(0, -1);
         
         // Processa ogni dipendente
@@ -264,7 +265,8 @@ const autoForceCheckout = async () => {
 
 // Schedule: Esegui ogni giorno alle 00:01
 cron.schedule('1 0 * * *', async () => {
-  console.log('⏰ [CRON] Job auto-checkout avviato alle 00:01');
+  const now = new Date();
+  console.log(`\n⏰ [CRON] Job auto-checkout avviato alle ${now.toLocaleString('it-IT', { timeZone: 'Europe/Rome' })}`);
   try {
     await autoForceCheckout();
   } catch (error) {
@@ -274,7 +276,13 @@ cron.schedule('1 0 * * *', async () => {
   timezone: "Europe/Rome"
 });
 
+const nextRun = new Date();
+nextRun.setHours(0, 1, 0, 0);
+if (nextRun <= new Date()) {
+  nextRun.setDate(nextRun.getDate() + 1);
+}
 console.log('✓ Scheduler auto-checkout attivato (esegue alle 00:01 ogni giorno)');
+console.log(`  → Prossima esecuzione prevista: ${nextRun.toLocaleString('it-IT', { timeZone: 'Europe/Rome' })}`);
 
 // ==================== EMAIL CONFIGURATION ====================
 
@@ -487,6 +495,71 @@ cron.schedule(cronExpression, async () => {
 });
 
 console.log(`✓ Scheduler report giornaliero attivato (esegue alle ${DAILY_REPORT_TIME} ogni giorno)`);
+
+// Endpoint DEBUG per verificare query auto-checkout (solo admin)
+app.post('/api/admin/debug-auto-checkout', async (req, res) => {
+  const { adminId } = req.body;
+  
+  // Verifica che sia un admin
+  db.get('SELECT * FROM employees WHERE id = ? AND isAdmin = 1', [adminId], async (err, admin) => {
+    if (err || !admin) {
+      res.status(403).json({ error: 'Unauthorized: Not an admin' });
+      return;
+    }
+    
+    const query = `
+      WITH LastRecords AS (
+        SELECT 
+          employeeId,
+          MAX(id) as lastId
+        FROM attendance_records
+        GROUP BY employeeId
+      )
+      SELECT 
+        ar.employeeId,
+        ar.workSiteId,
+        e.name as employeeName,
+        e.allowNightShift,
+        ws.name as workSiteName,
+        ar.timestamp as lastInTimestamp,
+        ar.type as lastType
+      FROM attendance_records ar
+      INNER JOIN LastRecords lr ON ar.id = lr.lastId
+      INNER JOIN employees e ON ar.employeeId = e.id
+      LEFT JOIN work_sites ws ON ar.workSiteId = ws.id
+      WHERE e.isActive = 1
+    `;
+    
+    db.all(query, [], (err, allEmployees) => {
+      if (err) {
+        res.status(500).json({ error: err.message });
+        return;
+      }
+      
+      const eligibleForAutoCheckout = allEmployees.filter(emp => 
+        emp.lastType === 'in' && 
+        (emp.allowNightShift === null || emp.allowNightShift === 0)
+      );
+      
+      res.json({
+        success: true,
+        debug: {
+          totalActiveEmployees: allEmployees.length,
+          employeesWithLastIN: allEmployees.filter(e => e.lastType === 'in').length,
+          employeesWithNightShiftEnabled: allEmployees.filter(e => e.allowNightShift === 1).length,
+          eligibleForAutoCheckout: eligibleForAutoCheckout.length,
+          details: allEmployees.map(emp => ({
+            name: emp.employeeName,
+            lastType: emp.lastType,
+            lastTimestamp: emp.lastInTimestamp,
+            allowNightShift: emp.allowNightShift,
+            eligibleForCheckout: emp.lastType === 'in' && (emp.allowNightShift === null || emp.allowNightShift === 0)
+          }))
+        }
+      });
+    });
+  });
+});
 
 // Endpoint manuale per testare l'auto-checkout (solo admin)
 app.post('/api/admin/force-auto-checkout', async (req, res) => {
