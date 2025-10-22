@@ -944,7 +944,7 @@ class ApiService {
     }
   }
 
-  // Scarica report Excel per cantiere (capocantiere)
+  // Scarica report Excel per cantiere (titolare)
   static Future<String?> downloadForemanWorkSiteReport({
     required int workSiteId,
     DateTime? startDate,
@@ -972,7 +972,7 @@ class ApiService {
         final dir = await getApplicationDocumentsDirectory();
         final timestamp = DateTime.now().millisecondsSinceEpoch;
         final file = File(
-          '${dir.path}/report_cantiere_capocantiere_$timestamp.xlsx',
+          '${dir.path}/report_cantiere_titolare_$timestamp.xlsx',
         );
         await file.writeAsBytes(bytes);
         print('Foreman report saved: ${file.path}');

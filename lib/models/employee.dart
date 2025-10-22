@@ -2,7 +2,7 @@
 enum EmployeeRole {
   admin,      // Amministratore: accesso completo
   employee,   // Dipendente: timbratura e visualizzazione proprie presenze
-  foreman,    // Capocantiere: visualizza report cantieri assegnati
+  foreman,    // Titolare: visualizza report cantieri assegnati
 }
 
 class Employee {
@@ -75,6 +75,7 @@ class Employee {
       name: map['name'],
       username: map['username'] ?? map['email']?.split('@')[0] ?? 'user${map['id']}', // Fallback per migrazione
       email: map['email'],
+      password: map['password'], // ✅ FIX: Leggi password dal JSON
       role: parsedRole,
       isAdmin: map['isAdmin'] == 1,
       isActive: (map['isActive'] ?? 1) == 1,
@@ -89,7 +90,7 @@ class Employee {
       case EmployeeRole.admin:
         return 'Amministratore';
       case EmployeeRole.foreman:
-        return 'Capocantiere';
+        return 'Titolare';
       case EmployeeRole.employee:
         return 'Dipendente';
     }

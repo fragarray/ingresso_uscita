@@ -7,7 +7,7 @@ import 'models/employee.dart';
 import 'pages/login_page.dart';
 import 'pages/admin_page.dart';
 import 'pages/employee_page.dart';
-import 'pages/foreman_page.dart';
+import 'pages/foreman_page_new.dart';
 import 'services/api_service.dart';
 
 void main() async {

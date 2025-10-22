@@ -463,23 +463,71 @@ class _SettingsTabState extends State<SettingsTab> {
   }
 
   Future<void> _loadSettings() async {
-    // Carica le impostazioni salvate
-    final appState = context.read<AppState>();
-    setState(() {
-      _minGpsAccuracy = appState.minGpsAccuracyPercent;
-      _isLoading = false;
-    });
+    setState(() => _isLoading = true);
+    
+    try {
+      // Ricarica SEMPRE dal server per avere il valore più aggiornato
+      final serverValue = await ApiService.getSetting('minGpsAccuracyPercent');
+      
+      if (serverValue != null) {
+        final accuracy = double.tryParse(serverValue) ?? 75.0;
+        
+        // Aggiorna anche l'AppState per sincronizzare
+        final appState = context.read<AppState>();
+        appState.setMinGpsAccuracyPercent(accuracy, adminId: null); // Null = non risalva
+        
+        if (!mounted) return;
+        setState(() {
+          _minGpsAccuracy = accuracy;
+        });
+        
+        debugPrint('✓ GPS accuracy loaded from server: $accuracy%');
+      } else {
+        // Fallback: usa il valore corrente dell'AppState
+        final appState = context.read<AppState>();
+        setState(() {
+          _minGpsAccuracy = appState.minGpsAccuracyPercent;
+        });
+        debugPrint('⚠️ Using AppState GPS accuracy: $_minGpsAccuracy%');
+      }
+    } catch (e) {
+      debugPrint('❌ Error loading GPS accuracy from server: $e');
+      // Fallback: usa il valore corrente dell'AppState
+      final appState = context.read<AppState>();
+      setState(() {
+        _minGpsAccuracy = appState.minGpsAccuracyPercent;
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   Future<void> _saveGpsAccuracy(double value) async {
     final appState = context.read<AppState>();
-    await appState.setMinGpsAccuracyPercent(value);
+    final adminId = appState.currentEmployee?.id;
+    
+    if (adminId == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Errore: admin non identificato'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
+    // Salva sul server con adminId
+    await appState.setMinGpsAccuracyPercent(value, adminId: adminId);
     
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Accuratezza GPS minima impostata al ${value.toInt()}%'),
+        content: Text('Accuratezza GPS minima impostata al ${value.toInt()}% per tutti i dispositivi'),
         backgroundColor: Colors.green,
+        duration: const Duration(seconds: 3),
       ),
     );
   }
@@ -1016,6 +1064,31 @@ class _SettingsTabState extends State<SettingsTab> {
                 Text(
                   'Imposta l\'accuratezza minima richiesta per effettuare una timbratura',
                   style: TextStyle(color: Colors.grey[600]),
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green[50],
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.green[300]!),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.cloud_done, color: Colors.green[700], size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Impostazione condivisa - Valida per tutti i dispositivi',
+                          style: TextStyle(
+                            color: Colors.green[900],
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 24),
                 Row(

@@ -702,16 +702,6 @@ class _PersonnelTabState extends State<PersonnelTab> {
     }
   }
 
-  void _editEmployee(Employee employee) {
-    showDialog(
-      context: context,
-      builder: (context) => EditEmployeeDialog(
-        employee: employee,
-        onEmployeeUpdated: _loadEmployees,
-      ),
-    );
-  }
-
   Future<void> _forceAttendance(Employee employee) async {
     // Carica i cantieri disponibili
     final workSites = await ApiService.getWorkSites();
@@ -1571,11 +1561,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
       // Determina il timestamp da usare (custom o corrente)
       final forcedDateTime = useCustomDateTime ? customDateTime : DateTime.now();
       
-      // VALIDAZIONE 1: Cerca timbrature IN nel range +/- 1 ora
-      final rangeStart = forcedDateTime.subtract(const Duration(hours: 1));
-      final rangeEnd = forcedDateTime.add(const Duration(hours: 1));
-      
-      // VALIDAZIONE 2: Controlla OVERLAP con turni esistenti
+      // VALIDAZIONE: Controlla OVERLAP con turni esistenti
       // Ordina i record per timestamp per creare coppie IN/OUT
       final sortedRecords = List<AttendanceRecord>.from(allRecords);
       sortedRecords.sort((a, b) => a.timestamp.compareTo(b.timestamp));
@@ -1592,6 +1578,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
           
           // CASO 1: Timestamp forzato cade DENTRO turno esistente
           // Esempio: Esiste 08:00-17:00, forzo IN alle 14:00
+          // ⚠️ BLOCCA SEMPRE, indipendentemente dal cantiere
           final isInsideExistingShift = forcedDateTime.isAfter(existingInTime) && 
                                          forcedDateTime.isBefore(existingOutTime);
           
@@ -1823,14 +1810,28 @@ class _PersonnelTabState extends State<PersonnelTab> {
         }
       }
       
-      // Se arriviamo qui, controlliamo anche IN singoli vicini
-      for (final record in allRecords) {
+      // Se arriviamo qui, controlliamo IN singoli ATTIVI (senza OUT successivo)
+      // Questo trova IN che non hanno ancora un OUT corrispondente
+      for (int i = 0; i < sortedRecords.length; i++) {
+        final record = sortedRecords[i];
+        
         if (record.type == 'in') {
           final recordTime = record.timestamp;
-          // Controlla se c'è sovrapposizione nel range ±1 ora
-          if (recordTime.isAfter(rangeStart) && recordTime.isBefore(rangeEnd)) {
-            // CONFLITTO TROVATO!
-            if (!mounted) return;
+          
+          // Verifica se questo IN ha un OUT successivo
+          bool hasOut = false;
+          if (i + 1 < sortedRecords.length && sortedRecords[i + 1].type == 'out') {
+            hasOut = true;
+          }
+          
+          // Se NON ha OUT, è un IN attivo - dobbiamo verificare
+          if (!hasOut) {
+            // Il nuovo IN forzato deve essere PRIMA dell'IN attivo esistente
+            // Altrimenti c'è conflitto
+            // ⚠️ BLOCCA SEMPRE, indipendentemente dal cantiere
+            if (forcedDateTime.isAfter(recordTime)) {
+              // CONFLITTO: Stai cercando di aggiungere un IN DOPO un IN attivo esistente
+              if (!mounted) return;
             
             // Trova il nome del cantiere del record esistente
             String existingWorkSiteName = 'N/D';
@@ -1973,28 +1974,240 @@ class _PersonnelTabState extends State<PersonnelTab> {
             
             // Blocca sempre l'operazione
             return;
+            }  // Fine if (forcedDateTime.isAfter(recordTime))
+          }  // Fine if (!hasOut)
+        }  // Fine if (record.type == 'in')
+      }  // Fine for loop checking active INs
+      
+      // ⚠️ CONTROLLO AGGIUNTIVO: Se sto forzando SOLO IN (senza OUT obbligatorio),
+      // verifico che non ci siano turni FUTURI che causerebbero overlap
+      // Esempio: Forzo IN alle 19:00, esiste turno 20:00-21:30 → BLOCCA
+      // perché l'IN alle 19:00 rimarrebbe attivo e si sovrapporrebbe al turno delle 20:00
+      
+      // Controlla se ci sono turni completi (IN+OUT) che iniziano DOPO il mio IN forzato
+      for (int i = 0; i < sortedRecords.length - 1; i++) {
+        final current = sortedRecords[i];
+        final next = sortedRecords[i + 1];
+        
+        // Se trovo una coppia IN → OUT
+        if (current.type == 'in' && next.type == 'out') {
+          final existingInTime = current.timestamp;
+          final existingOutTime = next.timestamp;
+          
+          // Se il turno esistente inizia DOPO il mio IN forzato
+          // Esempio: Forzo IN 19:00, turno esistente 20:00-21:30
+          if (existingInTime.isAfter(forcedDateTime)) {
+            // Questo è un problema perché il mio IN rimarrebbe attivo
+            // e si sovrapporrebbe a questo turno futuro
+            if (!mounted) return;
+            
+            // Trova nome cantiere
+            String futureWorkSiteName = 'N/D';
+            if (current.workSiteId != null) {
+              try {
+                final ws = workSites.firstWhere((w) => w.id == current.workSiteId);
+                futureWorkSiteName = ws.name;
+              } catch (e) {
+                futureWorkSiteName = 'Cantiere ID ${current.workSiteId}';
+              }
+            }
+            
+            await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: Row(
+                  children: [
+                    const Icon(Icons.warning, color: Colors.orange, size: 28),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'TURNO FUTURO RILEVATO',
+                        style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange[50],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.orange, width: 2),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Row(
+                              children: [
+                                Icon(Icons.error_outline, color: Colors.orange, size: 24),
+                                SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    '⚠️ IMPOSSIBILE FORZARE SOLO IN',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.orange,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              'Esiste un turno FUTURO per ${employee.name} che si sovrapporrebbe con l\'ingresso che stai tentando di forzare.',
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                            const SizedBox(height: 12),
+                            const Divider(),
+                            const SizedBox(height: 8),
+                            const Text(
+                              '🕐 Turno Futuro Esistente:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'IN: ${existingInTime.day.toString().padLeft(2, '0')}/${existingInTime.month.toString().padLeft(2, '0')}/${existingInTime.year} '
+                                    '${existingInTime.hour.toString().padLeft(2, '0')}:${existingInTime.minute.toString().padLeft(2, '0')}',
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                  Text(
+                                    'OUT: ${existingOutTime.day.toString().padLeft(2, '0')}/${existingOutTime.month.toString().padLeft(2, '0')}/${existingOutTime.year} '
+                                    '${existingOutTime.hour.toString().padLeft(2, '0')}:${existingOutTime.minute.toString().padLeft(2, '0')}',
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                  Text(
+                                    'Cantiere: $futureWorkSiteName',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            const Divider(),
+                            const SizedBox(height: 8),
+                            const Text(
+                              '🚫 Ingresso che stai tentando:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                                color: Colors.red,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.red[50],
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.red, width: 1),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'IN: ${forcedDateTime.day.toString().padLeft(2, '0')}/${forcedDateTime.month.toString().padLeft(2, '0')}/${forcedDateTime.year} '
+                                    '${forcedDateTime.hour.toString().padLeft(2, '0')}:${forcedDateTime.minute.toString().padLeft(2, '0')}',
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red),
+                                  ),
+                                  const Text(
+                                    'OUT: NON SPECIFICATO (rimarrebbe attivo)',
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.red),
+                                  ),
+                                  Text(
+                                    'Cantiere: ${selectedWorkSite?.name ?? 'N/D'}',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue[50],
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.lightbulb, color: Colors.blue, size: 20),
+                                SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'SOLUZIONE',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            SizedBox(height: 8),
+                            Text(
+                              'Devi forzare anche l\'uscita (OUT) prima che inizi il turno futuro, oppure eliminare il turno futuro se è un errore.',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: const Text('HO CAPITO'),
+                  ),
+                ],
+              ),
+            );
+            
+            // Blocca l'operazione
+            return;
           }
         }
       }
-    }
     
     DateTime? outDateTime;
     String? outNotes;
 
     final now = DateTime.now();
-    DateTime forcedDateTime;
-    
-    if (useCustomDateTime) {
-      forcedDateTime = customDateTime;
-    } else {
-      forcedDateTime = now;
-    }
+    // forcedDateTime è già definito sopra (riga ~1562)
+    // Riutilizziamo quella variabile
 
-    // Calcola le ore trascorse dall'ingresso forzato a ORA
+    // Calcola le ore trascorse dall'ingresso forzato a ORA  
     final hoursSinceIn = now.difference(forcedDateTime).inHours;
 
-    // REGOLA: Se sono passate più di 8 ore, OBBLIGATORIO forzare anche OUT
-    final mustForceOut = hoursSinceIn >= 8;
+    // REGOLA: Se sono passate più di 16 ore, OBBLIGATORIO forzare anche OUT
+    final mustForceOut = hoursSinceIn >= 16;
 
     if (mustForceOut && selectedType == 'in') {
       if (!mounted) return;
@@ -2068,22 +2281,15 @@ class _PersonnelTabState extends State<PersonnelTab> {
           final existingInTime = current.timestamp;
           final existingOutTime = next.timestamp;
           
-          // Controlla 4 casi di overlap:
-          // 1. Nuovo IN dentro turno esistente
-          final newInInsideExisting = forcedDateTime.isAfter(existingInTime) && 
-                                       forcedDateTime.isBefore(existingOutTime);
+          // ⚠️ LOGICA CORRETTA DI OVERLAP
+          // Due turni si sovrappongono se gli intervalli temporali si intersecano
+          // BLOCCA SEMPRE, indipendentemente dal cantiere (un dipendente non può essere in due posti)
           
-          // 2. Nuovo OUT dentro turno esistente
-          final newOutInsideExisting = outDateTime.isAfter(existingInTime) && 
-                                        outDateTime.isBefore(existingOutTime);
-          
-          // 3. Turno esistente completamente dentro nuovo turno
-          final existingInsideNew = existingInTime.isAfter(forcedDateTime) && 
-                                    existingOutTime.isBefore(outDateTime);
-          
-          // 4. Qualsiasi intersezione tra gli intervalli
-          final hasOverlap = (forcedDateTime.isBefore(existingOutTime) && 
-                              outDateTime.isAfter(existingInTime));
+          // Controlla overlap temporale CORRETTO
+          // Due intervalli [A1, A2] e [B1, B2] si sovrappongono SE:
+          // A1 < B2 AND B1 < A2
+          final hasOverlap = forcedDateTime.isBefore(existingOutTime) && 
+                             existingInTime.isBefore(outDateTime);
           
           if (hasOverlap) {
             if (!mounted) return;
@@ -2112,13 +2318,13 @@ class _PersonnelTabState extends State<PersonnelTab> {
             
             // Determina tipo di overlap per messaggio
             String overlapType;
-            if (newInInsideExisting && newOutInsideExisting) {
+            if (forcedDateTime.isAfter(existingInTime) && outDateTime.isBefore(existingOutTime)) {
               overlapType = 'Il nuovo turno è completamente DENTRO un turno esistente!';
-            } else if (existingInsideNew) {
+            } else if (existingInTime.isAfter(forcedDateTime) && existingOutTime.isBefore(outDateTime)) {
               overlapType = 'Il nuovo turno CONTIENE completamente un turno esistente!';
-            } else if (newInInsideExisting) {
+            } else if (forcedDateTime.isAfter(existingInTime) && forcedDateTime.isBefore(existingOutTime)) {
               overlapType = 'Il nuovo IN cade dentro un turno esistente!';
-            } else if (newOutInsideExisting) {
+            } else if (outDateTime.isAfter(existingInTime) && outDateTime.isBefore(existingOutTime)) {
               overlapType = 'Il nuovo OUT cade dentro un turno esistente!';
             } else {
               overlapType = 'I due turni si sovrappongono parzialmente!';
@@ -2422,12 +2628,12 @@ class _PersonnelTabState extends State<PersonnelTab> {
           );
         }
       } else {
-        // Solo IN salvato (timbratura recente < 8 ore)
+        // Solo IN salvato (timbratura recente < 16 ore)
         await Future.delayed(const Duration(milliseconds: 300));
         
         if (mounted) {
           context.read<AppState>().triggerRefresh();
-          }
+        }
         
         if (_selectedEmployee?.id == employee.id) {
           await _loadEmployeeAttendance(employee);
@@ -2452,8 +2658,9 @@ class _PersonnelTabState extends State<PersonnelTab> {
       ).showSnackBar(SnackBar(content: Text('Errore: $e')));
     }
   }
+}  // Fine if (selectedType == 'in')
 
-  // Dialog che OBBLIGA ad aggiungere OUT (>8 ore fa)
+  // Dialog che OBBLIGA ad aggiungere OUT (>16 ore fa)
   Widget _buildRequireOutDialog(
     BuildContext context,
     Employee employee,
@@ -2503,7 +2710,7 @@ class _PersonnelTabState extends State<PersonnelTab> {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'Stai forzando un ingresso di più di 8 ore fa ($hoursSince ore).',
+                  'Stai forzando un ingresso di più di 16 ore fa ($hoursSince ore).',
                   style: const TextStyle(fontSize: 13),
                 ),
                 const SizedBox(height: 8),
@@ -2946,19 +3153,31 @@ class _PersonnelTabState extends State<PersonnelTab> {
                                       _employeeClockedInStatus[employee.id] ??
                                       false;
 
+                                  // Determina il colore in base al ruolo e allo stato (COME MOBILE)
+                                  Color? cardColor;
+                                  if (isSelected) {
+                                    cardColor = Theme.of(context).colorScheme.primaryContainer;
+                                  } else if (employee.role == EmployeeRole.admin) {
+                                    // Admin: sfondo blu chiaro
+                                    cardColor = Colors.blue[50];
+                                  } else if (employee.role == EmployeeRole.foreman) {
+                                    // Titolare: sfondo arancione chiaro
+                                    cardColor = Colors.orange[50];
+                                  } else if (isClockedIn) {
+                                    // Dipendente in servizio: sfondo verde chiaro
+                                    cardColor = Colors.green[50];
+                                  }
+                                  // Altrimenti: trasparente (null)
+
                                   return Card(
                                     margin: const EdgeInsets.symmetric(
                                       horizontal: 8,
                                       vertical: 4,
                                     ),
-                                    color: isSelected
-                                        ? Theme.of(
-                                            context,
-                                          ).colorScheme.primaryContainer
-                                        : isClockedIn
-                                        ? Colors.green[50]
-                                        : null,
-                                    elevation: isClockedIn ? 3 : 1,
+                                    color: cardColor,
+                                    elevation: (employee.role == EmployeeRole.admin || 
+                                               employee.role == EmployeeRole.foreman || 
+                                               isClockedIn) ? 3 : 1,
                                     child: InkWell(
                                       onTap: () =>
                                           _loadEmployeeAttendance(employee),
@@ -2967,76 +3186,88 @@ class _PersonnelTabState extends State<PersonnelTab> {
                                         padding: const EdgeInsets.all(12.0),
                                         child: Row(
                                           children: [
-                                            // Avatar
+                                            // Avatar con colore basato su ruolo (COME MOBILE)
                                             CircleAvatar(
-                                              backgroundColor: isClockedIn
-                                                  ? Colors.green
-                                                  : null,
-                                              foregroundColor: isClockedIn
+                                              backgroundColor: employee.role == EmployeeRole.admin
+                                                  ? Colors.blue
+                                                  : employee.role == EmployeeRole.foreman
+                                                      ? Colors.orange
+                                                      : isClockedIn
+                                                          ? Colors.green
+                                                          : null,
+                                              foregroundColor: (employee.role == EmployeeRole.admin ||
+                                                      employee.role == EmployeeRole.foreman ||
+                                                      isClockedIn)
                                                   ? Colors.white
                                                   : null,
-                                              child: isClockedIn
-                                                  ? const Icon(
-                                                      Icons.check,
-                                                      size: 20,
-                                                    )
-                                                  : Text(
-                                                      employee.name[0]
-                                                          .toUpperCase(),
-                                                    ),
+                                              child: employee.role == EmployeeRole.admin
+                                                  ? const Icon(Icons.admin_panel_settings, size: 20)
+                                                  : employee.role == EmployeeRole.foreman
+                                                      ? const Icon(Icons.engineering, size: 20)
+                                                      : isClockedIn
+                                                          ? const Icon(Icons.check, size: 20)
+                                                          : Text(employee.name[0].toUpperCase()),
                                             ),
                                             const SizedBox(width: 12),
 
-                                            // Nome e email
+                                            // Informazioni dipendente (COME MOBILE)
                                             Expanded(
                                               child: Column(
                                                 crossAxisAlignment:
                                                     CrossAxisAlignment.start,
-                                                mainAxisSize: MainAxisSize.min,
                                                 children: [
                                                   Row(
                                                     children: [
-                                                      Flexible(
+                                                      Expanded(
                                                         child: Text(
                                                           employee.name,
                                                           style:
                                                               const TextStyle(
                                                                 fontWeight:
-                                                                    FontWeight
-                                                                        .w500,
-                                                                fontSize: 15,
+                                                                    FontWeight.bold,
+                                                                fontSize: 14,
                                                               ),
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                          maxLines: 1,
+                                                          overflow: TextOverflow.ellipsis,
                                                         ),
                                                       ),
-                                                      if (employee.isAdmin) ...[
-                                                        const SizedBox(
-                                                          width: 8,
-                                                        ),
+                                                      // Badge ruolo (COME MOBILE)
+                                                      if (employee.role == EmployeeRole.admin) ...[
+                                                        const SizedBox(width: 3),
                                                         Container(
-                                                          padding:
-                                                              const EdgeInsets.symmetric(
-                                                                horizontal: 8,
-                                                                vertical: 2,
-                                                              ),
+                                                          padding: const EdgeInsets.symmetric(
+                                                            horizontal: 5,
+                                                            vertical: 2,
+                                                          ),
                                                           decoration: BoxDecoration(
-                                                            color: Colors.red,
-                                                            borderRadius:
-                                                                BorderRadius.circular(
-                                                                  12,
-                                                                ),
+                                                            color: Colors.blue,
+                                                            borderRadius: BorderRadius.circular(4),
                                                           ),
                                                           child: const Text(
                                                             'ADMIN',
                                                             style: TextStyle(
-                                                              color:
-                                                                  Colors.white,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .bold,
-                                                              fontSize: 10,
+                                                              color: Colors.white,
+                                                              fontSize: 9,
+                                                              fontWeight: FontWeight.bold,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ] else if (employee.role == EmployeeRole.foreman) ...[
+                                                        const SizedBox(width: 3),
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(
+                                                            horizontal: 5,
+                                                            vertical: 2,
+                                                          ),
+                                                          decoration: BoxDecoration(
+                                                            color: Colors.orange,
+                                                            borderRadius: BorderRadius.circular(4),
+                                                          ),
+                                                          child: const Text(
+                                                            'TITOLARE',
+                                                            style: TextStyle(
+                                                              color: Colors.white,
+                                                              fontSize: 9,
+                                                              fontWeight: FontWeight.bold,
                                                             ),
                                                           ),
                                                         ),
@@ -3048,55 +3279,113 @@ class _PersonnelTabState extends State<PersonnelTab> {
                                                     employee.email ?? 'Nessuna email',
                                                     style: TextStyle(
                                                       color: Colors.grey[600],
-                                                      fontSize: 13,
+                                                      fontSize: 12,
                                                     ),
                                                     overflow:
                                                         TextOverflow.ellipsis,
-                                                    maxLines: 1,
                                                   ),
+                                                  // Mostra username e password quando dipendente è selezionato (COME MOBILE)
+                                                  if (isSelected) ...[
+                                                    const SizedBox(height: 4),
+                                                    Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons.account_circle,
+                                                          size: 12,
+                                                          color: Colors.blue[700],
+                                                        ),
+                                                        const SizedBox(width: 4),
+                                                        Text(
+                                                          'Username: ${employee.username}',
+                                                          style: TextStyle(
+                                                            color: Colors.blue[700],
+                                                            fontSize: 11,
+                                                            fontWeight: FontWeight.w500,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    const SizedBox(height: 2),
+                                                    Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons.lock,
+                                                          size: 12,
+                                                          color: Colors.orange[700],
+                                                        ),
+                                                        const SizedBox(width: 4),
+                                                        Expanded(
+                                                          child: Text(
+                                                            'Password: ${employee.password ?? "(non disponibile)"}',
+                                                            style: TextStyle(
+                                                              color: Colors.orange[700],
+                                                              fontSize: 11,
+                                                              fontWeight: FontWeight.w500,
+                                                              fontFamily: 'Courier', // Font monospazio per password
+                                                            ),
+                                                            overflow: TextOverflow.ellipsis,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ],
+                                                  // Badge "Timbrato IN" (COME MOBILE)
+                                                  if (isClockedIn) ...[
+                                                    const SizedBox(height: 4),
+                                                    Row(
+                                                      children: [
+                                                        Icon(
+                                                          Icons.access_time,
+                                                          size: 12,
+                                                          color: Colors.green[700],
+                                                        ),
+                                                        const SizedBox(width: 4),
+                                                        Text(
+                                                          'Timbrato IN',
+                                                          style: TextStyle(
+                                                            color: Colors.green[700],
+                                                            fontSize: 11,
+                                                            fontWeight: FontWeight.w500,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ],
                                                 ],
                                               ),
                                             ),
 
-                                            // Azioni
+                                            // Indicatore visivo per selezione/stato (COME MOBILE)
+                                            if (isSelected || isClockedIn)
+                                              Icon(
+                                                isSelected ? Icons.chevron_right : Icons.check_circle,
+                                                color: isSelected
+                                                    ? Theme.of(context).colorScheme.primary
+                                                    : Colors.green,
+                                                size: 24,
+                                              ),
+
+                                            // Pulsanti azione
                                             Row(
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
                                                 IconButton(
-                                                  icon: const Icon(Icons.edit),
-                                                  tooltip:
-                                                      'Modifica dipendente',
-                                                  iconSize: 20,
-                                                  padding: const EdgeInsets.all(
-                                                    8,
-                                                  ),
-                                                  constraints:
-                                                      const BoxConstraints(
-                                                        minWidth: 40,
-                                                        minHeight: 40,
+                                                  icon: const Icon(Icons.edit, size: 20),
+                                                  tooltip: 'Modifica dipendente',
+                                                  onPressed: () {
+                                                    showDialog(
+                                                      context: context,
+                                                      builder: (context) => EditEmployeeDialog(
+                                                        employee: employee,
+                                                        onEmployeeUpdated: _loadEmployees,
                                                       ),
-                                                  onPressed: () =>
-                                                      _editEmployee(employee),
+                                                    );
+                                                  },
                                                 ),
                                                 IconButton(
-                                                  icon: const Icon(
-                                                    Icons.delete,
-                                                  ),
-                                                  tooltip: employee.isAdmin
-                                                      ? 'Elimina amministratore'
-                                                      : 'Elimina dipendente',
-                                                  iconSize: 20,
-                                                  color: Colors.red[700],
-                                                  padding: const EdgeInsets.all(
-                                                    8,
-                                                  ),
-                                                  constraints:
-                                                      const BoxConstraints(
-                                                        minWidth: 40,
-                                                        minHeight: 40,
-                                                      ),
-                                                  onPressed: () =>
-                                                      _removeEmployee(employee),
+                                                  icon: const Icon(Icons.delete, size: 20, color: Colors.red),
+                                                  tooltip: 'Elimina dipendente',
+                                                  onPressed: () => _removeEmployee(employee),
                                                 ),
                                               ],
                                             ),
@@ -3318,6 +3607,24 @@ class _PersonnelTabState extends State<PersonnelTab> {
                 ],
               ),
             ),
+          // Legenda colori
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _buildLegendItem(Colors.blue, 'Admin'),
+                  const SizedBox(width: 12),
+                  _buildLegendItem(Colors.orange, 'Titolare'),
+                  const SizedBox(width: 12),
+                  _buildLegendItem(Colors.green, 'In Servizio'),
+                  const SizedBox(width: 12),
+                  _buildLegendItem(Colors.grey[300]!, 'Operaio'),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 8),
           // Lista dipendenti filtrata
           Expanded(
@@ -3368,18 +3675,32 @@ class _PersonnelTabState extends State<PersonnelTab> {
         final employee = _filteredEmployees[index];
         final isSelected = _selectedEmployee?.id == employee.id;
         final isClockedIn = _employeeClockedInStatus[employee.id] ?? false;
+        
+        // Determina il colore in base al ruolo e allo stato
+        Color? cardColor;
+        if (isSelected) {
+          cardColor = Theme.of(context).colorScheme.primaryContainer;
+        } else if (employee.role == EmployeeRole.admin) {
+          // Admin: sfondo blu chiaro
+          cardColor = Colors.blue[50];
+        } else if (employee.role == EmployeeRole.foreman) {
+          // Titolare: sfondo arancione chiaro
+          cardColor = Colors.orange[50];
+        } else if (isClockedIn) {
+          // Dipendente in servizio: sfondo verde chiaro
+          cardColor = Colors.green[50];
+        }
+        // Altrimenti: trasparente (null)
 
         return Card(
           margin: const EdgeInsets.symmetric(
             horizontal: 8,
             vertical: 4,
           ),
-          color: isSelected
-              ? Theme.of(context).colorScheme.primaryContainer
-              : isClockedIn
-                  ? Colors.green[50]
-                  : null,
-          elevation: isClockedIn ? 3 : 1,
+          color: cardColor,
+          elevation: (employee.role == EmployeeRole.admin || 
+                     employee.role == EmployeeRole.foreman || 
+                     isClockedIn) ? 3 : 1,
           child: InkWell(
             onTap: () => _loadEmployeeAttendance(employee),
             borderRadius: BorderRadius.circular(12),
@@ -3387,13 +3708,27 @@ class _PersonnelTabState extends State<PersonnelTab> {
               padding: const EdgeInsets.all(12.0),
               child: Row(
                 children: [
-                  // Avatar
+                  // Avatar con colore basato su ruolo
                   CircleAvatar(
-                    backgroundColor: isClockedIn ? Colors.green : null,
-                    foregroundColor: isClockedIn ? Colors.white : null,
-                    child: isClockedIn
-                        ? const Icon(Icons.check, size: 20)
-                        : Text(employee.name[0].toUpperCase()),
+                    backgroundColor: employee.role == EmployeeRole.admin
+                        ? Colors.blue
+                        : employee.role == EmployeeRole.foreman
+                            ? Colors.orange
+                            : isClockedIn
+                                ? Colors.green
+                                : null,
+                    foregroundColor: (employee.role == EmployeeRole.admin ||
+                            employee.role == EmployeeRole.foreman ||
+                            isClockedIn)
+                        ? Colors.white
+                        : null,
+                    child: employee.role == EmployeeRole.admin
+                        ? const Icon(Icons.admin_panel_settings, size: 20)
+                        : employee.role == EmployeeRole.foreman
+                            ? const Icon(Icons.engineering, size: 20)
+                            : isClockedIn
+                                ? const Icon(Icons.check, size: 20)
+                                : Text(employee.name[0].toUpperCase()),
                   ),
                   const SizedBox(width: 12),
                   // Informazioni dipendente
@@ -3413,7 +3748,8 @@ class _PersonnelTabState extends State<PersonnelTab> {
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            if (employee.isAdmin) ...[
+                            // Badge ruolo
+                            if (employee.role == EmployeeRole.admin) ...[
                               const SizedBox(width: 3),
                               Container(
                                 padding: const EdgeInsets.symmetric(
@@ -3433,6 +3769,26 @@ class _PersonnelTabState extends State<PersonnelTab> {
                                   ),
                                 ),
                               ),
+                            ] else if (employee.role == EmployeeRole.foreman) ...[
+                              const SizedBox(width: 3),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 5,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text(
+                                  'TITOLARE',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
                             ],
                           ],
                         ),
@@ -3445,6 +3801,51 @@ class _PersonnelTabState extends State<PersonnelTab> {
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
+                        // Mostra username e password quando dipendente è selezionato
+                        if (isSelected) ...[
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.account_circle,
+                                size: 12,
+                                color: Colors.blue[700],
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Username: ${employee.username}',
+                                style: TextStyle(
+                                  color: Colors.blue[700],
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.lock,
+                                size: 12,
+                                color: Colors.orange[700],
+                              ),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  'Password: ${employee.password ?? "(non disponibile)"}',
+                                  style: TextStyle(
+                                    color: Colors.orange[700],
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                    fontFamily: 'Courier', // Font monospazio per password
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                         if (isClockedIn) ...[
                           const SizedBox(height: 4),
                           Row(
@@ -3482,6 +3883,15 @@ class _PersonnelTabState extends State<PersonnelTab> {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      // Pulsante Forza Timbratura (solo se NON è admin o titolare)
+                      if (employee.role != EmployeeRole.admin && 
+                          employee.role != EmployeeRole.foreman)
+                        IconButton(
+                          icon: const Icon(Icons.admin_panel_settings, size: 20),
+                          tooltip: 'Forza timbratura',
+                          color: Colors.orange,
+                          onPressed: () => _forceAttendance(employee),
+                        ),
                       IconButton(
                         icon: const Icon(Icons.edit, size: 20),
                         tooltip: 'Modifica dipendente',
@@ -4529,6 +4939,32 @@ class _PersonnelTabState extends State<PersonnelTab> {
         ),
       );
     }
+  }
+
+  // Costruisce un elemento della legenda colori
+  Widget _buildLegendItem(Color color, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 16,
+          height: 16,
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.3),
+            border: Border.all(color: color, width: 2),
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
+    );
   }
 }
 

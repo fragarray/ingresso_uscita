@@ -17,6 +17,7 @@ class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
   final _usernameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController(); // ✅ NUOVO: Conferma password
   bool _isLoading = false;
   EmployeeRole _selectedRole = EmployeeRole.employee;
   bool _allowNightShift = false;
@@ -27,6 +28,7 @@ class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
     _usernameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _confirmPasswordController.dispose(); // ✅ NUOVO: Dispose conferma password
     super.dispose();
   }
 
@@ -40,7 +42,7 @@ class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
         name: _nameController.text.trim(),
         username: _usernameController.text.trim(),
         email: _emailController.text.trim().isEmpty ? null : _emailController.text.trim(),
-        password: _passwordController.text,
+        password: _passwordController.text.trim(), // ✅ FIX: trim() per rimuovere spazi
         role: _selectedRole,
         allowNightShift: _allowNightShift,
       );
@@ -152,15 +154,41 @@ class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
                 decoration: const InputDecoration(
                   labelText: 'Password',
                   prefixIcon: Icon(Icons.lock),
-                  helperText: 'Minimo 6 caratteri',
+                  helperText: 'Minimo 6 caratteri - ATTENZIONE: Annota la password!',
+                  helperMaxLines: 2,
                 ),
                 obscureText: true,
+                autocorrect: false,
+                enableSuggestions: false,
                 validator: (value) {
-                  if (value == null || value.isEmpty) {
+                  if (value == null || value.trim().isEmpty) {
                     return 'Inserire una password';
                   }
-                  if (value.length < 6) {
+                  if (value.trim().length < 6) {
                     return 'La password deve essere di almeno 6 caratteri';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+              // ✅ NUOVO: Campo Conferma Password
+              TextFormField(
+                controller: _confirmPasswordController,
+                decoration: const InputDecoration(
+                  labelText: 'Conferma Password',
+                  prefixIcon: Icon(Icons.lock_outline),
+                  helperText: 'Reinserisci la password per conferma',
+                  helperMaxLines: 2,
+                ),
+                obscureText: true,
+                autocorrect: false,
+                enableSuggestions: false,
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Confermare la password';
+                  }
+                  if (value.trim() != _passwordController.text.trim()) {
+                    return 'Le password non corrispondono!';
                   }
                   return null;
                 },
@@ -180,7 +208,7 @@ class _AddEmployeeDialogState extends State<AddEmployeeDialog> {
                   ),
                   DropdownMenuItem(
                     value: EmployeeRole.foreman,
-                    child: Text('👷‍♂️ Capocantiere'),
+                    child: Text('� Titolare'),
                   ),
                   DropdownMenuItem(
                     value: EmployeeRole.admin,

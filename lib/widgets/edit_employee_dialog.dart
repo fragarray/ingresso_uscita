@@ -22,6 +22,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
   late TextEditingController _usernameController;
   late TextEditingController _emailController;
   late TextEditingController _passwordController;
+  late TextEditingController _confirmPasswordController; // ✅ NUOVO: Conferma password
   bool _isLoading = false;
   late EmployeeRole _selectedRole;
   late bool _allowNightShift;
@@ -34,6 +35,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
     _usernameController = TextEditingController(text: widget.employee.username);
     _emailController = TextEditingController(text: widget.employee.email ?? '');
     _passwordController = TextEditingController();
+    _confirmPasswordController = TextEditingController(); // ✅ NUOVO: Init conferma password
     _selectedRole = widget.employee.role;
     _allowNightShift = widget.employee.allowNightShift;
   }
@@ -44,6 +46,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
     _usernameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _confirmPasswordController.dispose(); // ✅ NUOVO: Dispose conferma password
     super.dispose();
   }
 
@@ -58,7 +61,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
         name: _nameController.text.trim(),
         username: _usernameController.text.trim(),
         email: _emailController.text.trim().isEmpty ? null : _emailController.text.trim(),
-        password: _changePassword ? _passwordController.text : null,
+        password: _changePassword ? _passwordController.text.trim() : null, // ✅ FIX: trim() per rimuovere spazi
         role: _selectedRole,
         allowNightShift: _allowNightShift,
       );
@@ -196,6 +199,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
                     _changePassword = value ?? false;
                     if (!_changePassword) {
                       _passwordController.clear();
+                      _confirmPasswordController.clear(); // ✅ Pulisci anche conferma password
                     }
                   });
                 },
@@ -214,13 +218,41 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
                     helperText: 'Minimo 6 caratteri',
                     border: OutlineInputBorder(),
                   ),
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
                   validator: (value) {
                     if (_changePassword) {
-                      if (value == null || value.isEmpty) {
+                      if (value == null || value.trim().isEmpty) {
                         return 'Inserire una password';
                       }
-                      if (value.length < 6) {
+                      if (value.trim().length < 6) {
                         return 'La password deve essere di almeno 6 caratteri';
+                      }
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                // ✅ NUOVO: Campo Conferma Password
+                TextFormField(
+                  controller: _confirmPasswordController,
+                  decoration: const InputDecoration(
+                    labelText: 'Conferma Nuova Password',
+                    prefixIcon: Icon(Icons.lock_outline),
+                    helperText: 'Reinserisci la password per conferma',
+                    border: OutlineInputBorder(),
+                  ),
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  validator: (value) {
+                    if (_changePassword) {
+                      if (value == null || value.trim().isEmpty) {
+                        return 'Confermare la password';
+                      }
+                      if (value.trim() != _passwordController.text.trim()) {
+                        return 'Le password non corrispondono!';
                       }
                     }
                     return null;
@@ -245,7 +277,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
                   ),
                   DropdownMenuItem(
                     value: EmployeeRole.foreman,
-                    child: Text('👷‍♂️ Capocantiere'),
+                    child: Text('� Titolare'),
                   ),
                   DropdownMenuItem(
                     value: EmployeeRole.admin,
