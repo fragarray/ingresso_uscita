@@ -12,7 +12,7 @@ import '../models/work_site.dart';
 class ApiService {
   // URL di default SENZA porta (verrà aggiunta dinamicamente)
   static const String _defaultHost = 'fragarray.freeddns.it';
-  static const int _defaultPort = 3000; // Porta di default come costante
+  static const int _defaultPort = 1234; // Porta di default come costante
   static String? _cachedBaseUrl;
 
   // Get base URL from SharedPreferences or use default

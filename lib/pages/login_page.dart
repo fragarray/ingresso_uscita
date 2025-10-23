@@ -291,7 +291,7 @@ class _LoginPageState extends State<LoginPage> {
                   controller: portController,
                   decoration: InputDecoration(
                     labelText: 'Porta',
-                    hintText: 'es. 3000',
+                    hintText: 'es. ${ApiService.getDefaultServerPort()}',
                     helperText: 'Porta del servizio (default: ${ApiService.getDefaultServerPort()})',
                     border: const OutlineInputBorder(),
                     prefixIcon: const Icon(Icons.power),

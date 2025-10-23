@@ -327,7 +327,7 @@ class _SettingsTabState extends State<SettingsTab> {
   final TextEditingController _serverIpController = TextEditingController();
   final TextEditingController _serverPortController = TextEditingController();
   String _currentServerIp = '192.168.1.2';
-  int _currentServerPort = 3000;
+  int _currentServerPort = ApiService.getDefaultServerPort(); // Usa metodo invece di hardcoding
   bool _testingConnection = false;
 
   @override
@@ -349,7 +349,7 @@ class _SettingsTabState extends State<SettingsTab> {
   Future<void> _loadServerIp() async {
     final prefs = await SharedPreferences.getInstance();
     final savedIp = prefs.getString('serverIp') ?? '192.168.1.2';
-    final savedPort = prefs.getInt('serverPort') ?? 3000;
+    final savedPort = prefs.getInt('serverPort') ?? ApiService.getDefaultServerPort(); // Usa metodo
     setState(() {
       _currentServerIp = savedIp;
       _currentServerPort = savedPort;
@@ -978,11 +978,11 @@ class _SettingsTabState extends State<SettingsTab> {
                       flex: 1,
                       child: TextField(
                         controller: _serverPortController,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Porta',
-                          hintText: 'es. 1234',
-                          border: OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.power),
+                          hintText: 'es. ${ApiService.getDefaultServerPort()}',
+                          border: const OutlineInputBorder(),
+                          prefixIcon: const Icon(Icons.power),
                           helperText: ' ', // Spazio per allineamento
                         ),
                         keyboardType: TextInputType.number,
