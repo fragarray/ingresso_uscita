@@ -18,7 +18,8 @@ class _ForemanPageState extends State<ForemanPage> {
   Map<int, List<Map<String, dynamic>>> _activeEmployeesByWorkSite = {};
   Map<int, List<Map<String, dynamic>>> _completedShiftsByWorkSite = {};
   Map<int, bool> _expandedWorkSites = {};
-  Map<int, bool> _showCompletedShifts = {};
+  DateTime _selectedDate = DateTime.now(); // Data selezionata per la visualizzazione
+  bool _isGeneratingReport = false;
 
   @override
   void initState() {
@@ -62,10 +63,9 @@ class _ForemanPageState extends State<ForemanPage> {
 
   Future<void> _loadCompletedShifts(int workSiteId) async {
     try {
-      // Carica i turni completati di oggi per questo cantiere
-      final today = DateTime.now();
-      final startOfDay = DateTime(today.year, today.month, today.day);
-      final endOfDay = DateTime(today.year, today.month, today.day, 23, 59, 59);
+      // Carica i turni completati per la data selezionata per questo cantiere
+      final startOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+      final endOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day, 23, 59, 59);
       
       final data = await ApiService.getWorkSiteHistory(
         workSiteId: workSiteId,
@@ -132,33 +132,38 @@ class _ForemanPageState extends State<ForemanPage> {
       final workSites = await ApiService.getWorkSites();
       final activeWorkSites = workSites.where((ws) => ws.isActive).toList();
       
-      // Carica dipendenti attivi per ogni cantiere
+      // Verifica se la data selezionata è oggi
+      final today = DateTime.now();
+      final isToday = _selectedDate.year == today.year && 
+                      _selectedDate.month == today.month && 
+                      _selectedDate.day == today.day;
+      
+      // Carica dipendenti attivi per ogni cantiere (solo se data = oggi)
       final Map<int, List<Map<String, dynamic>>> employeesByWorkSite = {};
       final Map<int, bool> expandedStates = {};
-      final Map<int, bool> showCompletedStates = {};
       
       for (var workSite in activeWorkSites) {
         try {
-          final employees = await ApiService.getActiveEmployeesForWorkSite(workSite.id!);
+          // Carica dipendenti attivi solo se visualizziamo oggi
+          final employees = isToday 
+              ? await ApiService.getActiveEmployeesForWorkSite(workSite.id!)
+              : <Map<String, dynamic>>[];
           employeesByWorkSite[workSite.id!] = employees;
           
-          // Logica checkbox intelligente:
-          // Se ci sono dipendenti presenti -> checkbox deselezionata, espandi
-          // Se NON ci sono dipendenti presenti -> checkbox selezionata, carica turni completati
-          if (employees.isNotEmpty) {
-            expandedStates[workSite.id!] = true;
-            showCompletedStates[workSite.id!] = false;
-          } else {
-            expandedStates[workSite.id!] = false;
-            showCompletedStates[workSite.id!] = true;
-            // Carica subito i turni completati
-            await _loadCompletedShifts(workSite.id!);
-          }
+          // Carica SEMPRE i turni completati per la data selezionata
+          await _loadCompletedShifts(workSite.id!);
+          
+          // Logica espansione:
+          // - Se ci sono dipendenti IN (solo oggi) -> espandi
+          // - Se ci sono turni completati -> espandi
+          // - Altrimenti -> comprimi
+          final completedShifts = _completedShiftsByWorkSite[workSite.id!] ?? [];
+          expandedStates[workSite.id!] = employees.isNotEmpty || completedShifts.isNotEmpty;
+          
         } catch (e) {
           print('Error loading employees for worksite ${workSite.id}: $e');
           employeesByWorkSite[workSite.id!] = [];
           expandedStates[workSite.id!] = false;
-          showCompletedStates[workSite.id!] = true;
         }
       }
       
@@ -170,7 +175,6 @@ class _ForemanPageState extends State<ForemanPage> {
         _sortedWorkSites = sortedWorkSites;
         _activeEmployeesByWorkSite = employeesByWorkSite;
         _expandedWorkSites = expandedStates;
-        _showCompletedShifts = showCompletedStates;
         _isLoading = false;
       });
     } catch (e) {
@@ -185,12 +189,72 @@ class _ForemanPageState extends State<ForemanPage> {
     }
   }
 
-  void _showWorkSiteHistory(WorkSite workSite) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => _WorkSiteHistoryPage(workSite: workSite),
-      ),
+  Future<void> _selectDate() async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(
+              primary: Colors.blue,
+              onPrimary: Colors.white,
+            ),
+          ),
+          child: child!,
+        );
+      },
     );
+
+    if (picked != null && picked != _selectedDate) {
+      setState(() {
+        _selectedDate = picked;
+      });
+      await _loadAllData(); // Ricarica i dati per la nuova data
+    }
+  }
+
+  Future<void> _generateAllWorkSitesReportPdf() async {
+    setState(() => _isGeneratingReport = true);
+
+    try {
+      final filePath = await ApiService.downloadForemanAllWorkSitesReportPdf(
+        date: _selectedDate,
+      );
+
+      setState(() => _isGeneratingReport = false);
+
+      if (filePath != null) {
+        if (!mounted) return;
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Report PDF scaricato: ${filePath.split('/').last}'),
+            action: SnackBarAction(
+              label: 'Apri',
+              onPressed: () async {
+                await OpenFile.open(filePath);
+              },
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Errore durante il download del report PDF')),
+        );
+      }
+    } catch (e) {
+      setState(() => _isGeneratingReport = false);
+      if (!mounted) return;
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Errore: $e')),
+      );
+    }
   }
 
   @override
@@ -209,21 +273,140 @@ class _ForemanPageState extends State<ForemanPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Titolare - ${employee?.name ?? ""}'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadAllData,
-            tooltip: 'Aggiorna',
+        title: null,
+        automaticallyImplyLeading: false,
+        titleSpacing: 0,
+        toolbarHeight: 56,
+        flexibleSpace: SafeArea(
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Colors.blue[700]!, Colors.blue[900]!],
+              ),
+            ),
+            child: Stack(
+              children: [
+                // Titolare a sinistra
+                Positioned(
+                  left: 16,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: Text(
+                      'Titolare - ${employee?.name ?? ""}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ),
+                ),
+                
+                // Calendario + Report al centro assoluto
+                Center(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Pulsante Data + Calendario
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: _selectDate,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.2),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.calendar_today, size: 18, color: Colors.blue[700]),
+                                const SizedBox(width: 8),
+                                Text(
+                                  DateFormat('dd/MM/yyyy').format(_selectedDate),
+                                  style: TextStyle(
+                                    color: Colors.blue[900],
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // Pulsante Report
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: IconButton(
+                          icon: _isGeneratingReport
+                              ? SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[700]!),
+                                  ),
+                                )
+                              : Icon(Icons.description, color: Colors.blue[700], size: 22),
+                          onPressed: _isGeneratingReport ? null : _generateAllWorkSitesReportPdf,
+                          tooltip: 'Stampa report PDF tutti i cantieri',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                // Pulsanti a destra
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.refresh, color: Colors.white),
+                        onPressed: _loadAllData,
+                        tooltip: 'Aggiorna',
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.logout, color: Colors.white),
+                        onPressed: () {
+                          appState.logout();
+                        },
+                        tooltip: 'Logout',
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () {
-              appState.logout();
-            },
-            tooltip: 'Logout',
-          ),
-        ],
+        ),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -347,11 +530,10 @@ class _ForemanPageState extends State<ForemanPage> {
   }
 
   Widget _buildWorkSiteExpansionTile(WorkSite workSite, List<Map<String, dynamic>> employees, bool isExpanded) {
-    bool showCompletedShifts = _showCompletedShifts[workSite.id!] ?? false;
     final completedShifts = _completedShiftsByWorkSite[workSite.id!] ?? [];
     
-    // I cantieri con dipendenti IN devono essere SEMPRE aperti
-    final shouldBeExpanded = employees.isNotEmpty ? true : isExpanded;
+    // I cantieri con dipendenti IN o turni completati devono essere SEMPRE aperti
+    final shouldBeExpanded = employees.isNotEmpty || completedShifts.isNotEmpty ? true : isExpanded;
     
     // Determina il colore del cantiere
     Color workSiteColor;
@@ -360,7 +542,7 @@ class _ForemanPageState extends State<ForemanPage> {
       // Verde: ha dipendenti presenti
       workSiteColor = Colors.green;
       workSiteBackgroundColor = Colors.green[50]!;
-    } else if (completedShifts.isNotEmpty && showCompletedShifts) {
+    } else if (completedShifts.isNotEmpty) {
       // Arancione: ha turni completati ma nessuno presente
       workSiteColor = Colors.orange;
       workSiteBackgroundColor = Colors.orange[50]!;
@@ -376,18 +558,18 @@ class _ForemanPageState extends State<ForemanPage> {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: employees.isNotEmpty || (completedShifts.isNotEmpty && showCompletedShifts) 
+          color: employees.isNotEmpty || completedShifts.isNotEmpty
               ? workSiteColor 
               : Colors.grey[300]!,
-          width: employees.isNotEmpty || (completedShifts.isNotEmpty && showCompletedShifts) ? 2 : 1,
+          width: employees.isNotEmpty || completedShifts.isNotEmpty ? 2 : 1,
         ),
       ),
       child: ExpansionTile(
         key: PageStorageKey<int>(workSite.id!),
         initiallyExpanded: shouldBeExpanded,
         onExpansionChanged: (expanded) {
-          // I cantieri con dipendenti IN non possono essere compressi
-          if (employees.isNotEmpty) {
+          // I cantieri con dipendenti IN o turni completati non possono essere compressi
+          if (employees.isNotEmpty || completedShifts.isNotEmpty) {
             return; // Ignora il tentativo di comprimere
           }
           
@@ -464,7 +646,7 @@ class _ForemanPageState extends State<ForemanPage> {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    '${employees.length + (showCompletedShifts ? completedShifts.length : 0)}',
+                    '${employees.length + completedShifts.length}',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
@@ -474,52 +656,10 @@ class _ForemanPageState extends State<ForemanPage> {
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            // Checkbox OUT
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'OUT',
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Transform.scale(
-                  scale: 0.7,
-                  child: Checkbox(
-                    value: showCompletedShifts,
-                    onChanged: (value) async {
-                      // Aggiorna lo stato della checkbox
-                      _showCompletedShifts[workSite.id!] = value ?? false;
-                      
-                      // Carica i turni completati se checkbox selezionata
-                      if (value == true && !_completedShiftsByWorkSite.containsKey(workSite.id!)) {
-                        await _loadCompletedShifts(workSite.id!);
-                      }
-                      
-                      // Chiama setState UNA SOLA VOLTA alla fine
-                      setState(() {});
-                    },
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(width: 4),
-            // Pulsante storico
-            IconButton(
-              icon: const Icon(Icons.history, color: Colors.blue, size: 20),
-              tooltip: 'Storico cantiere',
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () => _showWorkSiteHistory(workSite),
-            ),
           ],
         ),
         children: [
-          if (employees.isEmpty && (!showCompletedShifts || completedShifts.isEmpty))
+          if (employees.isEmpty && completedShifts.isEmpty)
             Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
@@ -528,7 +668,7 @@ class _ForemanPageState extends State<ForemanPage> {
                   Icon(Icons.people_outline, color: Colors.grey[400]!, size: 20),
                   const SizedBox(width: 8),
                   Text(
-                    'Nessun dipendente presente',
+                    'Nessuna attività in questa data',
                     style: TextStyle(
                       color: Colors.grey[600]!,
                       fontSize: 14,
@@ -545,7 +685,7 @@ class _ForemanPageState extends State<ForemanPage> {
                 spacing: 12,
                 runSpacing: 12,
                 children: [
-                  // Dipendenti ATTIVI (verde)
+                  // Dipendenti ATTIVI (verde) - solo se visualizziamo oggi
                   ...employees.map((empData) {
                     final timestamp = empData['timestamp'] != null
                         ? DateTime.parse(empData['timestamp'])
@@ -562,26 +702,25 @@ class _ForemanPageState extends State<ForemanPage> {
                     );
                   }),
                   
-                  // Dipendenti con TURNO COMPLETATO (arancione) - solo se checkbox attiva
-                  if (showCompletedShifts)
-                    ...completedShifts.map((shiftData) {
-                      final name = shiftData['employeeName'] ?? 'Sconosciuto';
-                      final initial = name.substring(0, 1).toUpperCase();
-                      final inTime = shiftData['inTimestamp'] != null
-                          ? DateTime.parse(shiftData['inTimestamp'])
-                          : null;
-                      final outTime = shiftData['outTimestamp'] != null
-                          ? DateTime.parse(shiftData['outTimestamp'])
-                          : null;
+                  // Dipendenti con TURNO COMPLETATO (arancione) - SEMPRE visualizzati
+                  ...completedShifts.map((shiftData) {
+                    final name = shiftData['employeeName'] ?? 'Sconosciuto';
+                    final initial = name.substring(0, 1).toUpperCase();
+                    final inTime = shiftData['inTimestamp'] != null
+                        ? DateTime.parse(shiftData['inTimestamp'])
+                        : null;
+                    final outTime = shiftData['outTimestamp'] != null
+                        ? DateTime.parse(shiftData['outTimestamp'])
+                        : null;
 
-                      return _buildEmployeeAvatar(
-                        name: name,
-                        initial: initial,
-                        inTimestamp: inTime,
-                        outTimestamp: outTime,
-                        isActive: false,
-                      );
-                    }),
+                    return _buildEmployeeAvatar(
+                      name: name,
+                      initial: initial,
+                      inTimestamp: inTime,
+                      outTimestamp: outTime,
+                      isActive: false,
+                    );
+                  }),
                 ],
               ),
             ),
@@ -598,8 +737,6 @@ class _ForemanPageState extends State<ForemanPage> {
     required DateTime? outTimestamp,
     required bool isActive,
   }) {
-    final color = isActive ? Colors.green : Colors.orange;
-    
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -612,11 +749,13 @@ class _ForemanPageState extends State<ForemanPage> {
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [color[400]!, color[700]!],
+              colors: isActive
+                  ? [Colors.green[400]!, Colors.green[700]!]
+                  : [Colors.orange[400]!, Colors.orange[700]!],
             ),
             boxShadow: [
               BoxShadow(
-                color: color.withOpacity(0.3),
+                color: (isActive ? Colors.green : Colors.orange).withOpacity(0.3),
                 blurRadius: 4,
                 offset: const Offset(0, 2),
               ),
@@ -676,26 +815,26 @@ class _ForemanPageState extends State<ForemanPage> {
             ),
           ),
         if (!isActive && inTimestamp != null && outTimestamp != null)
-          // Ingresso e Uscita (arancione)
+          // Ingresso (verde) e Uscita (arancione) con colori diversi
           Column(
             children: [
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: Colors.orange[100],
+                  color: Colors.green[100],
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.login, size: 9, color: Colors.orange),
+                    const Icon(Icons.login, size: 9, color: Colors.green),
                     const SizedBox(width: 2),
                     Text(
                       DateFormat('HH:mm').format(inTimestamp),
                       style: TextStyle(
                         fontSize: 9,
                         fontWeight: FontWeight.bold,
-                        color: Colors.orange[900],
+                        color: Colors.green[900],
                       ),
                     ),
                   ],

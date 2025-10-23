@@ -23,9 +23,9 @@
     "multer": "^2.0.2",
     "node-cron": "^4.2.1",
     "nodemailer": "^6.9.7",
+    "pdfkit": "^0.17.2",
     "sqlite3": "^5.1.7"
   },
-  "optionalDependencies": {},
   "overrides": {
     "fsevents": "npm:noop2@^2.0.0"
   },

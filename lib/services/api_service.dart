@@ -986,5 +986,79 @@ class ApiService {
       return null;
     }
   }
+
+  // Download report per TUTTI i cantieri in una data specifica (Excel)
+  static Future<String?> downloadForemanAllWorkSitesReport({
+    required DateTime date,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final queryParams = <String, String>{
+        'date': date.toIso8601String(),
+      };
+
+      final uri = Uri.parse('$baseUrl/foreman/all-worksites-report')
+          .replace(queryParameters: queryParams);
+
+      print('Downloading all worksites report: $uri');
+      final response = await http.get(uri);
+
+      if (response.statusCode == 200) {
+        final bytes = response.bodyBytes;
+        final dir = await getApplicationDocumentsDirectory();
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final dateStr = '${date.day.toString().padLeft(2, '0')}-${date.month.toString().padLeft(2, '0')}-${date.year}';
+        final file = File(
+          '${dir.path}/report_tutti_cantieri_$dateStr\_$timestamp.xlsx',
+        );
+        await file.writeAsBytes(bytes);
+        print('All worksites report saved: ${file.path}');
+        return file.path;
+      } else {
+        print('Error response: ${response.statusCode} - ${response.body}');
+      }
+      return null;
+    } catch (e) {
+      print('Download all worksites report error: $e');
+      return null;
+    }
+  }
+
+  // Download report per TUTTI i cantieri in una data specifica (PDF)
+  static Future<String?> downloadForemanAllWorkSitesReportPdf({
+    required DateTime date,
+  }) async {
+    try {
+      final baseUrl = await getBaseUrl();
+      final queryParams = <String, String>{
+        'date': date.toIso8601String(),
+      };
+
+      final uri = Uri.parse('$baseUrl/foreman/all-worksites-report-pdf')
+          .replace(queryParameters: queryParams);
+
+      print('Downloading all worksites PDF report: $uri');
+      final response = await http.get(uri);
+
+      if (response.statusCode == 200) {
+        final bytes = response.bodyBytes;
+        final dir = await getApplicationDocumentsDirectory();
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final dateStr = '${date.day.toString().padLeft(2, '0')}-${date.month.toString().padLeft(2, '0')}-${date.year}';
+        final file = File(
+          '${dir.path}/report_tutti_cantieri_$dateStr\_$timestamp.pdf',
+        );
+        await file.writeAsBytes(bytes);
+        print('All worksites PDF report saved: ${file.path}');
+        return file.path;
+      } else {
+        print('Error response: ${response.statusCode} - ${response.body}');
+      }
+      return null;
+    } catch (e) {
+      print('Download all worksites PDF report error: $e');
+      return null;
+    }
+  }
 }
 

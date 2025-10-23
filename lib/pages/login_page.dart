@@ -200,82 +200,183 @@ class _LoginPageState extends State<LoginPage> {
 
   void _showServerConfigDialog() {
     final ipController = TextEditingController();
+    final portController = TextEditingController(text: '3000');
     
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Configura Server'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+        title: Row(
           children: [
-            const Text(
-              'Il server predefinito non è raggiungibile.',
-              style: TextStyle(color: Colors.orange),
-            ),
-            const SizedBox(height: 16),
-            const Text('Inserisci l\'indirizzo del server:'),
-            const SizedBox(height: 8),
-            TextField(
-              controller: ipController,
-              decoration: const InputDecoration(
-                labelText: 'IP o Hostname',
-                hintText: 'es. 192.168.1.100 o server.local',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.dns),
-              ),
-            ),
+            Icon(Icons.settings_input_antenna, color: Theme.of(context).primaryColor),
+            const SizedBox(width: 8),
+            const Text('Configura Server'),
           ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 20),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Il server predefinito non è raggiungibile.',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'Inserisci i dati del server:',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: ipController,
+                decoration: InputDecoration(
+                  labelText: 'Indirizzo IP o Hostname',
+                  hintText: 'es. 192.168.1.100',
+                  helperText: 'Indirizzo del server',
+                  border: const OutlineInputBorder(),
+                  prefixIcon: const Icon(Icons.dns),
+                  filled: true,
+                  fillColor: Colors.grey.shade50,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: portController,
+                decoration: InputDecoration(
+                  labelText: 'Porta',
+                  hintText: '3000',
+                  helperText: 'Porta del servizio (default: 3000)',
+                  border: const OutlineInputBorder(),
+                  prefixIcon: const Icon(Icons.power),
+                  filled: true,
+                  fillColor: Colors.grey.shade50,
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.blue.shade700, size: 18),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Esempio completo:\nIP: 192.168.1.100\nPorta: 3000',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Annulla'),
           ),
-          ElevatedButton(
+          ElevatedButton.icon(
             onPressed: () async {
               final newIp = ipController.text.trim();
+              final portText = portController.text.trim();
+              
               if (newIp.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Inserire un indirizzo valido')),
+                  const SnackBar(content: Text('Inserire un indirizzo IP valido')),
+                );
+                return;
+              }
+              
+              final newPort = int.tryParse(portText);
+              if (newPort == null || newPort < 1 || newPort > 65535) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Inserire una porta valida (1-65535)')),
                 );
                 return;
               }
               
               Navigator.pop(context);
-              await _testAndSaveServer(newIp);
+              await _testAndSaveServer(newIp, newPort);
             },
-            child: const Text('Verifica'),
+            icon: const Icon(Icons.check_circle),
+            label: const Text('Verifica e Salva'),
           ),
         ],
       ),
     );
   }
 
-  Future<void> _testAndSaveServer(String ip) async {
+  Future<void> _testAndSaveServer(String ip, int port) async {
     setState(() => _isCheckingServer = true);
     
-    final result = await ApiService.pingServer(ip);
+    final result = await ApiService.pingServer(ip, port);
     
     if (!mounted) return;
     
     if (result['success'] == true) {
       // Server raggiungibile, salvalo
       await ApiService.setServerIp(ip);
+      await ApiService.setServerPort(port);
       
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Server configurato: ${result['message']}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '✅ Server configurato con successo!',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text('Indirizzo: $ip:$port'),
+              Text('Versione: ${result['version']}'),
+            ],
+          ),
           backgroundColor: Colors.green,
-          duration: const Duration(seconds: 3),
+          duration: const Duration(seconds: 4),
         ),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Errore: ${result['error']}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '❌ Errore di connessione',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text(result['error'] ?? 'Errore sconosciuto'),
+            ],
+          ),
           backgroundColor: Colors.red,
-          duration: const Duration(seconds: 4),
+          duration: const Duration(seconds: 5),
         ),
       );
     }
@@ -419,23 +520,49 @@ class _LoginPageState extends State<LoginPage> {
                 ),
               ),
               const SizedBox(height: 40),
-              // Pulsante discreto per verificare il server
-              TextButton.icon(
-                onPressed: _isCheckingServer ? null : _checkServerConnection,
-                icon: _isCheckingServer 
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.cloud_outlined, size: 16),
-                label: Text(
-                  _isCheckingServer ? 'Verifica in corso...' : 'Verifica Server',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.grey,
-                ),
+              // Pulsanti per gestione server
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Pulsante verifica server
+                  TextButton.icon(
+                    onPressed: _isCheckingServer ? null : _checkServerConnection,
+                    icon: _isCheckingServer 
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cloud_outlined, size: 16),
+                    label: Text(
+                      _isCheckingServer ? 'Verifica...' : 'Verifica Server',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.grey,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // Separatore verticale
+                  Container(
+                    height: 20,
+                    width: 1,
+                    color: Colors.grey.shade300,
+                  ),
+                  const SizedBox(width: 8),
+                  // Pulsante configura server
+                  TextButton.icon(
+                    onPressed: _isCheckingServer || _isLoading ? null : _showServerConfigDialog,
+                    icon: const Icon(Icons.settings, size: 16),
+                    label: const Text(
+                      'Configura Server',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.grey,
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

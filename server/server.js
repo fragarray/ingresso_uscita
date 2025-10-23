@@ -3548,6 +3548,437 @@ app.get('/api/foreman/worksite-report/:workSiteId', async (req, res) => {
   }
 });
 
+// GET /api/foreman/all-worksites-report
+// Genera e scarica report Excel con TUTTI i cantieri per una data specifica
+app.get('/api/foreman/all-worksites-report', async (req, res) => {
+  let { date } = req.query;
+  
+  console.log(`📊 [FOREMAN] Generazione report Excel per TUTTI i cantieri`);
+  console.log(`   📅 Data selezionata: ${date}`);
+  
+  if (!date) {
+    return res.status(400).json({ error: 'Data mancante' });
+  }
+  
+  try {
+    // Calcola inizio e fine giornata per la data selezionata
+    const selectedDate = new Date(date);
+    const startOfDay = new Date(selectedDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date(selectedDate);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    const startDate = startOfDay.toISOString();
+    const endDate = endOfDay.toISOString();
+    
+    console.log(`   📅 Periodo: ${startDate} -> ${endDate}`);
+    
+    // Recupera tutti i cantieri attivi
+    const workSites = await new Promise((resolve, reject) => {
+      db.all('SELECT * FROM work_sites WHERE isActive = 1 ORDER BY name', [], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+    });
+    
+    console.log(`   🏗️  Trovati ${workSites.length} cantieri attivi`);
+    
+    // Query per recuperare TUTTE le timbrature del giorno
+    const query = `
+      SELECT 
+        ar.id,
+        ar.employeeId,
+        ar.workSiteId,
+        ar.timestamp,
+        ar.type,
+        ar.isForced,
+        ar.notes,
+        COALESCE(e.name, '[DIPENDENTE ELIMINATO #' || ar.employeeId || ']') as employeeName,
+        ws.name as workSiteName,
+        ws.address as workSiteAddress
+      FROM attendance_records ar
+      LEFT JOIN employees e ON ar.employeeId = e.id
+      LEFT JOIN work_sites ws ON ar.workSiteId = ws.id
+      WHERE ar.timestamp >= ? AND ar.timestamp <= ?
+      ORDER BY ws.name, ar.timestamp ASC
+    `;
+    
+    const allRecords = await new Promise((resolve, reject) => {
+      db.all(query, [startDate, endDate], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+    });
+    
+    console.log(`   📝 Trovate ${allRecords.length} timbrature totali`);
+    
+    // Genera Excel
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Tutti i Cantieri');
+    
+    // Intestazione
+    worksheet.columns = [
+      { header: 'Cantiere', key: 'workSiteName', width: 25 },
+      { header: 'Indirizzo', key: 'workSiteAddress', width: 30 },
+      { header: 'Dipendente', key: 'employeeName', width: 25 },
+      { header: 'Data', key: 'date', width: 12 },
+      { header: 'Ora', key: 'time', width: 10 },
+      { header: 'Tipo', key: 'type', width: 10 },
+      { header: 'Forzata', key: 'isForced', width: 10 },
+      { header: 'Note', key: 'notes', width: 30 },
+    ];
+    
+    // Stile intestazione
+    worksheet.getRow(1).font = { bold: true, size: 12 };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    
+    // Aggiungi dati
+    allRecords.forEach(record => {
+      const timestamp = new Date(record.timestamp);
+      worksheet.addRow({
+        workSiteName: record.workSiteName || 'Cantiere sconosciuto',
+        workSiteAddress: record.workSiteAddress || '',
+        employeeName: record.employeeName,
+        date: timestamp.toLocaleDateString('it-IT'),
+        time: timestamp.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
+        type: record.type === 'in' ? 'ENTRATA' : 'USCITA',
+        isForced: record.isForced ? 'SÌ' : 'NO',
+        notes: record.notes || '',
+      });
+    });
+    
+    // Info generali in cima
+    worksheet.insertRow(1, ['Report Tutti i Cantieri']);
+    worksheet.insertRow(2, ['Data:', selectedDate.toLocaleDateString('it-IT')]);
+    worksheet.insertRow(3, ['Cantieri attivi:', workSites.length]);
+    worksheet.insertRow(4, ['Totale timbrature:', allRecords.length]);
+    worksheet.insertRow(5, []); // Riga vuota
+    
+    worksheet.getRow(1).font = { bold: true, size: 14 };
+    worksheet.getRow(2).font = { bold: true };
+    worksheet.getRow(3).font = { italic: true };
+    worksheet.getRow(4).font = { bold: true };
+    
+    // Salva file temporaneo
+    const tempDir = path.join(__dirname, 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir);
+    }
+    
+    const dateStr = selectedDate.toLocaleDateString('it-IT').replace(/\//g, '-');
+    const filename = `report_tutti_cantieri_${dateStr}_${Date.now()}.xlsx`;
+    const filepath = path.join(tempDir, filename);
+    
+    await workbook.xlsx.writeFile(filepath);
+    
+    console.log(`✅ [FOREMAN] Report tutti i cantieri generato: ${filename}`);
+    
+    // Invia file
+    res.download(filepath, filename, (err) => {
+      if (err) {
+        console.error('Error sending file:', err);
+      }
+      // Elimina file temporaneo dopo l'invio
+      fs.unlink(filepath, (unlinkErr) => {
+        if (unlinkErr) console.error('Error deleting temp file:', unlinkErr);
+      });
+    });
+    
+  } catch (error) {
+    console.error('❌ [FOREMAN] Errore generazione report tutti i cantieri:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/foreman/all-worksites-report-pdf
+// Genera e scarica report PDF con TUTTI i cantieri per una data specifica
+app.get('/api/foreman/all-worksites-report-pdf', async (req, res) => {
+  let { date } = req.query;
+  
+  console.log(`📊 [FOREMAN] Generazione report PDF per TUTTI i cantieri`);
+  console.log(`   📅 Data selezionata: ${date}`);
+  
+  if (!date) {
+    return res.status(400).json({ error: 'Data mancante' });
+  }
+  
+  try {
+    // Importa PDFKit
+    const PDFDocument = require('pdfkit');
+    
+    // Calcola inizio e fine giornata per la data selezionata
+    const selectedDate = new Date(date);
+    const startOfDay = new Date(selectedDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date(selectedDate);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    const startDate = startOfDay.toISOString();
+    const endDate = endOfDay.toISOString();
+    
+    console.log(`   📅 Periodo: ${startDate} -> ${endDate}`);
+    
+    // Recupera tutti i cantieri attivi
+    const workSites = await new Promise((resolve, reject) => {
+      db.all('SELECT * FROM work_sites WHERE isActive = 1 ORDER BY name', [], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+    });
+    
+    console.log(`   🏗️  Trovati ${workSites.length} cantieri attivi`);
+    
+    // Query per recuperare TUTTE le timbrature del giorno
+    const query = `
+      SELECT 
+        ar.id,
+        ar.employeeId,
+        ar.workSiteId,
+        ar.timestamp,
+        ar.type,
+        ar.isForced,
+        ar.notes,
+        COALESCE(e.name, '[DIPENDENTE ELIMINATO #' || ar.employeeId || ']') as employeeName,
+        ws.name as workSiteName,
+        ws.address as workSiteAddress
+      FROM attendance_records ar
+      LEFT JOIN employees e ON ar.employeeId = e.id
+      LEFT JOIN work_sites ws ON ar.workSiteId = ws.id
+      WHERE ar.timestamp >= ? AND ar.timestamp <= ?
+      ORDER BY ws.name, ar.timestamp ASC
+    `;
+    
+    const allRecords = await new Promise((resolve, reject) => {
+      db.all(query, [startDate, endDate], (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+    });
+    
+    console.log(`   📝 Trovate ${allRecords.length} timbrature totali`);
+    
+    // Crea documento PDF
+    const doc = new PDFDocument({ 
+      margin: 50,
+      size: 'A4',
+      layout: 'landscape' // Orizzontale per più spazio
+    });
+    
+    // Salva file temporaneo
+    const tempDir = path.join(__dirname, 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir);
+    }
+    
+    const dateStr = selectedDate.toLocaleDateString('it-IT').replace(/\//g, '-');
+    const filename = `report_tutti_cantieri_${dateStr}_${Date.now()}.pdf`;
+    const filepath = path.join(tempDir, filename);
+    
+    const stream = fs.createWriteStream(filepath);
+    doc.pipe(stream);
+    
+    // Intestazione PDF
+    doc.fontSize(20).font('Helvetica-Bold').text('Report Tutti i Cantieri', { align: 'center' });
+    doc.moveDown(0.5);
+    
+    // Box informativo in alto (come Excel)
+    const infoBoxTop = doc.y;
+    doc.fontSize(11).font('Helvetica-Bold');
+    doc.fillColor('#1F4E78');
+    doc.text('Informazioni Report', 50, infoBoxTop);
+    doc.moveDown(0.3);
+    
+    doc.fontSize(10).font('Helvetica');
+    doc.fillColor('black');
+    doc.text(`Data: ${selectedDate.toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}`, 50);
+    doc.text(`Cantieri attivi: ${workSites.length}`, 50);
+    
+    // Calcola timbrature IN e OUT
+    const inRecords = allRecords.filter(r => r.type === 'in').length;
+    const outRecords = allRecords.filter(r => r.type === 'out').length;
+    const forcedRecords = allRecords.filter(r => r.isForced).length;
+    
+    doc.text(`Totale timbrature: ${allRecords.length} (IN: ${inRecords}, OUT: ${outRecords})`, 50);
+    doc.text(`Timbrature forzate: ${forcedRecords}`, 50);
+    
+    // Linea separatrice
+    doc.moveTo(50, doc.y + 5).lineTo(792 - 50, doc.y + 5).stroke('#CCCCCC');
+    doc.moveDown(1);
+    
+    // Tabella header - Ordine: Dipendente Cantiere Data Ora Indirizzo Tipo Forzata Note
+    const tableTop = doc.y;
+    const colWidths = {
+      dipendente: 100,
+      cantiere: 105,
+      data: 65,
+      ora: 40,
+      indirizzo: 135,
+      tipo: 55,
+      forzata: 45,
+      note: 145
+    };
+    
+    let x = 50;
+    const totalWidth = colWidths.dipendente + colWidths.cantiere + colWidths.data + 
+                       colWidths.ora + colWidths.indirizzo + colWidths.tipo + 
+                       colWidths.forzata + colWidths.note;
+    
+    // Header background
+    doc.rect(x, tableTop, totalWidth, 22).fill('#4472C4');
+    
+    // Header text
+    doc.fontSize(8.5).font('Helvetica-Bold').fillColor('white');
+    doc.text('Dipendente', x + 2, tableTop + 6, { width: colWidths.dipendente - 4, align: 'left', lineBreak: false });
+    x += colWidths.dipendente;
+    doc.text('Cantiere', x + 2, tableTop + 6, { width: colWidths.cantiere - 4, align: 'left', lineBreak: false });
+    x += colWidths.cantiere;
+    doc.text('Data', x + 2, tableTop + 6, { width: colWidths.data - 4, align: 'left', lineBreak: false });
+    x += colWidths.data;
+    doc.text('Ora', x + 2, tableTop + 6, { width: colWidths.ora - 4, align: 'left', lineBreak: false });
+    x += colWidths.ora;
+    doc.text('Indirizzo', x + 2, tableTop + 6, { width: colWidths.indirizzo - 4, align: 'left', lineBreak: false });
+    x += colWidths.indirizzo;
+    doc.text('Tipo', x + 2, tableTop + 6, { width: colWidths.tipo - 4, align: 'left', lineBreak: false });
+    x += colWidths.tipo;
+    doc.text('Forz.', x + 2, tableTop + 6, { width: colWidths.forzata - 4, align: 'left', lineBreak: false });
+    x += colWidths.forzata;
+    doc.text('Note', x + 2, tableTop + 6, { width: colWidths.note - 4, align: 'left', lineBreak: false });
+    
+    doc.moveDown(1.5);
+    doc.fillColor('black').font('Helvetica');
+    
+    // Funzione helper per troncare testo se troppo lungo
+    const truncateText = (text, maxWidth, fontSize) => {
+      doc.fontSize(fontSize);
+      const width = doc.widthOfString(text);
+      if (width <= maxWidth) return text;
+      
+      // Tronca e aggiungi ellipsis
+      let truncated = text;
+      while (doc.widthOfString(truncated + '...') > maxWidth && truncated.length > 0) {
+        truncated = truncated.slice(0, -1);
+      }
+      return truncated + '...';
+    };
+    
+    // Dati
+    let rowCount = 0;
+    const rowHeight = 20; // Altezza fissa per evitare sovrapposizioni
+    
+    for (const record of allRecords) {
+      // Controlla se serve nuova pagina
+      if (doc.y > 500) {
+        doc.addPage();
+        doc.y = 50;
+      }
+      
+      const timestamp = new Date(record.timestamp);
+      const rowY = doc.y;
+      
+      // Alternating row colors con altezza fissa
+      if (rowCount % 2 === 0) {
+        doc.rect(50, rowY - 2, totalWidth, rowHeight).fillAndStroke('#F8F8F8', '#E0E0E0');
+      }
+      
+      doc.fillColor('black').fontSize(8);
+      x = 50;
+      
+      // Ordine: Dipendente Cantiere Data Ora Indirizzo Tipo Forzata Note
+      // Usa lineBreak: false per evitare wrapping e ellipsis: true per troncare
+      const textY = rowY + 4;
+      
+      doc.text(truncateText(record.employeeName, colWidths.dipendente - 4, 8), x + 2, textY, { 
+        width: colWidths.dipendente - 4, align: 'left', lineBreak: false, ellipsis: true 
+      });
+      x += colWidths.dipendente;
+      
+      doc.text(truncateText(record.workSiteName || 'N/A', colWidths.cantiere - 4, 8), x + 2, textY, { 
+        width: colWidths.cantiere - 4, align: 'left', lineBreak: false, ellipsis: true 
+      });
+      x += colWidths.cantiere;
+      
+      doc.text(timestamp.toLocaleDateString('it-IT'), x + 2, textY, { 
+        width: colWidths.data - 4, align: 'left', lineBreak: false 
+      });
+      x += colWidths.data;
+      
+      doc.text(timestamp.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }), x + 2, textY, { 
+        width: colWidths.ora - 4, align: 'left', lineBreak: false 
+      });
+      x += colWidths.ora;
+      
+      doc.text(truncateText(record.workSiteAddress || '', colWidths.indirizzo - 4, 8), x + 2, textY, { 
+        width: colWidths.indirizzo - 4, align: 'left', lineBreak: false, ellipsis: true 
+      });
+      x += colWidths.indirizzo;
+      
+      doc.text(record.type === 'in' ? 'IN' : 'OUT', x + 2, textY, { 
+        width: colWidths.tipo - 4, align: 'left', lineBreak: false 
+      });
+      x += colWidths.tipo;
+      
+      doc.text(record.isForced ? 'SÌ' : 'NO', x + 2, textY, { 
+        width: colWidths.forzata - 4, align: 'left', lineBreak: false 
+      });
+      x += colWidths.forzata;
+      
+      doc.text(truncateText(record.notes || '', colWidths.note - 4, 8), x + 2, textY, { 
+        width: colWidths.note - 4, align: 'left', lineBreak: false, ellipsis: true 
+      });
+      
+      // Muovi alla prossima riga con altezza fissa
+      doc.y = rowY + rowHeight;
+      rowCount++;
+    }
+    
+    // Footer
+    const pages = doc.bufferedPageRange();
+    for (let i = 0; i < pages.count; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).text(
+        `Pagina ${i + 1} di ${pages.count}`,
+        50,
+        doc.page.height - 50,
+        { align: 'center' }
+      );
+    }
+    
+    doc.end();
+    
+    // Aspetta che il file sia scritto
+    stream.on('finish', () => {
+      console.log(`✅ [FOREMAN] Report PDF tutti i cantieri generato: ${filename}`);
+      
+      // Invia file
+      res.download(filepath, filename, (err) => {
+        if (err) {
+          console.error('Error sending PDF file:', err);
+        }
+        // Elimina file temporaneo dopo l'invio
+        fs.unlink(filepath, (unlinkErr) => {
+          if (unlinkErr) console.error('Error deleting temp PDF file:', unlinkErr);
+        });
+      });
+    });
+    
+    stream.on('error', (err) => {
+      console.error('❌ [FOREMAN] Errore scrittura PDF:', err);
+      res.status(500).json({ error: err.message });
+    });
+    
+  } catch (error) {
+    console.error('❌ [FOREMAN] Errore generazione report PDF tutti i cantieri:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ==================== END FOREMAN API ====================
 
 // ==================== BACKUP DATABASE ====================
