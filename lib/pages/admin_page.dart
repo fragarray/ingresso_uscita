@@ -980,7 +980,7 @@ class _SettingsTabState extends State<SettingsTab> {
                         controller: _serverPortController,
                         decoration: const InputDecoration(
                           labelText: 'Porta',
-                          hintText: '3000',
+                          hintText: 'es. 1234',
                           border: OutlineInputBorder(),
                           prefixIcon: Icon(Icons.power),
                           helperText: ' ', // Spazio per allineamento

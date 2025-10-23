@@ -22,7 +22,23 @@ class _LoginPageState extends State<LoginPage> {
   void initState() {
     super.initState();
     _loadSavedCredentials();
+    _checkFirstRunAndPromptPort(); // Controlla primo avvio
     _attemptAutoLogin();
+  }
+
+  // Controlla se è il primo avvio e mostra dialog configurazione porta
+  Future<void> _checkFirstRunAndPromptPort() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasConfiguredPort = prefs.getBool('port_configured') ?? false;
+    
+    if (!hasConfiguredPort) {
+      // Primo avvio - mostra dialog dopo che la UI è pronta
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showServerConfigDialog(isFirstRun: true);
+        }
+      });
+    }
   }
 
   Future<void> _loadSavedCredentials() async {
@@ -198,138 +214,155 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => _isCheckingServer = false);
   }
 
-  void _showServerConfigDialog() {
-    final ipController = TextEditingController();
-    final portController = TextEditingController(text: '3000');
+  void _showServerConfigDialog({bool isFirstRun = false}) {
+    final ipController = TextEditingController(
+      text: isFirstRun ? ApiService.getDefaultServerIp() : '',
+    );
+    final portController = TextEditingController(
+      text: ApiService.getDefaultServerPort().toString(),
+    );
     
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(Icons.settings_input_antenna, color: Theme.of(context).primaryColor),
-            const SizedBox(width: 8),
-            const Text('Configura Server'),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+      barrierDismissible: !isFirstRun, // Non può chiudere al primo avvio
+      builder: (context) => WillPopScope(
+        onWillPop: () async => !isFirstRun, // Impedisce back button al primo avvio
+        child: AlertDialog(
+          title: Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.orange.shade200),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 20),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'Il server predefinito non è raggiungibile.',
-                        style: TextStyle(fontSize: 13),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Inserisci i dati del server:',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: ipController,
-                decoration: InputDecoration(
-                  labelText: 'Indirizzo IP o Hostname',
-                  hintText: 'es. 192.168.1.100',
-                  helperText: 'Indirizzo del server',
-                  border: const OutlineInputBorder(),
-                  prefixIcon: const Icon(Icons.dns),
-                  filled: true,
-                  fillColor: Colors.grey.shade50,
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: portController,
-                decoration: InputDecoration(
-                  labelText: 'Porta',
-                  hintText: '3000',
-                  helperText: 'Porta del servizio (default: 3000)',
-                  border: const OutlineInputBorder(),
-                  prefixIcon: const Icon(Icons.power),
-                  filled: true,
-                  fillColor: Colors.grey.shade50,
-                ),
-                keyboardType: TextInputType.number,
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade50,
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: Colors.blue.shade200),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline, color: Colors.blue.shade700, size: 18),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'Esempio completo:\nIP: 192.168.1.100\nPorta: 3000',
-                        style: TextStyle(fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              Icon(Icons.settings_input_antenna, color: Theme.of(context).primaryColor),
+              const SizedBox(width: 8),
+              Text(isFirstRun ? '⚙️ Configurazione Iniziale' : 'Configura Server'),
             ],
           ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: isFirstRun ? Colors.blue.shade50 : Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: isFirstRun ? Colors.blue.shade200 : Colors.orange.shade200,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        isFirstRun ? Icons.info : Icons.warning_amber,
+                        color: isFirstRun ? Colors.blue.shade700 : Colors.orange.shade700,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          isFirstRun
+                              ? 'Primo avvio: configura la porta del server per iniziare.'
+                              : 'Il server predefinito non è raggiungibile.',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Inserisci i dati del server:',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: ipController,
+                  decoration: InputDecoration(
+                    labelText: 'Indirizzo IP o Hostname',
+                    hintText: 'es. 192.168.1.100',
+                    helperText: 'Indirizzo del server',
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.dns),
+                    filled: true,
+                    fillColor: Colors.grey.shade50,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: portController,
+                  decoration: InputDecoration(
+                    labelText: 'Porta',
+                    hintText: 'es. 3000',
+                    helperText: 'Porta del servizio (default: ${ApiService.getDefaultServerPort()})',
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.power),
+                    filled: true,
+                    fillColor: Colors.grey.shade50,
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.blue.shade700, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Esempio completo:\nIP: ${ApiService.getDefaultServerIp()}\nPorta: ${ApiService.getDefaultServerPort()}',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            if (!isFirstRun) // Mostra Annulla solo se non è primo avvio
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Annulla'),
+              ),
+            ElevatedButton.icon(
+              onPressed: () async {
+                final newIp = ipController.text.trim();
+                final portText = portController.text.trim();
+                
+                if (newIp.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Inserire un indirizzo IP valido')),
+                  );
+                  return;
+                }
+                
+                final newPort = int.tryParse(portText);
+                if (newPort == null || newPort < 1 || newPort > 65535) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Inserire una porta valida (1-65535)')),
+                  );
+                  return;
+                }
+                
+                Navigator.pop(context);
+                await _testAndSaveServer(newIp, newPort, isFirstRun: isFirstRun);
+              },
+              icon: const Icon(Icons.check_circle),
+              label: const Text('Verifica e Salva'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Annulla'),
-          ),
-          ElevatedButton.icon(
-            onPressed: () async {
-              final newIp = ipController.text.trim();
-              final portText = portController.text.trim();
-              
-              if (newIp.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Inserire un indirizzo IP valido')),
-                );
-                return;
-              }
-              
-              final newPort = int.tryParse(portText);
-              if (newPort == null || newPort < 1 || newPort > 65535) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Inserire una porta valida (1-65535)')),
-                );
-                return;
-              }
-              
-              Navigator.pop(context);
-              await _testAndSaveServer(newIp, newPort);
-            },
-            icon: const Icon(Icons.check_circle),
-            label: const Text('Verifica e Salva'),
-          ),
-        ],
       ),
     );
   }
 
-  Future<void> _testAndSaveServer(String ip, int port) async {
+  Future<void> _testAndSaveServer(String ip, int port, {bool isFirstRun = false}) async {
     setState(() => _isCheckingServer = true);
     
     final result = await ApiService.pingServer(ip, port);
@@ -341,15 +374,23 @@ class _LoginPageState extends State<LoginPage> {
       await ApiService.setServerIp(ip);
       await ApiService.setServerPort(port);
       
+      // Se è il primo avvio, segna che la porta è stata configurata
+      if (isFirstRun) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('port_configured', true);
+      }
+      
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                '✅ Server configurato con successo!',
-                style: TextStyle(fontWeight: FontWeight.bold),
+              Text(
+                isFirstRun 
+                    ? '✅ Configurazione completata con successo!' 
+                    : '✅ Server configurato con successo!',
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 4),
               Text('Indirizzo: $ip:$port'),
@@ -379,6 +420,15 @@ class _LoginPageState extends State<LoginPage> {
           duration: const Duration(seconds: 5),
         ),
       );
+      
+      // Se è primo avvio e fallisce, mostra di nuovo il dialog
+      if (isFirstRun && mounted) {
+        Future.delayed(const Duration(seconds: 6), () {
+          if (mounted) {
+            _showServerConfigDialog(isFirstRun: true);
+          }
+        });
+      }
     }
     
     setState(() => _isCheckingServer = false);

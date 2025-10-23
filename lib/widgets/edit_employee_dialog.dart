@@ -277,7 +277,7 @@ class _EditEmployeeDialogState extends State<EditEmployeeDialog> {
                   ),
                   DropdownMenuItem(
                     value: EmployeeRole.foreman,
-                    child: Text('� Titolare'),
+                    child: Text('👔 Titolare'),
                   ),
                   DropdownMenuItem(
                     value: EmployeeRole.admin,

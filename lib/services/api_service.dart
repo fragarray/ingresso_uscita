@@ -10,7 +10,9 @@ import '../models/employee.dart';
 import '../models/work_site.dart';
 
 class ApiService {
-  static const String _defaultBaseUrl = 'http://fragarray.freeddns.it:3000/api';
+  // URL di default SENZA porta (verrà aggiunta dinamicamente)
+  static const String _defaultHost = 'fragarray.freeddns.it';
+  static const int _defaultPort = 3000; // Porta di default come costante
   static String? _cachedBaseUrl;
 
   // Get base URL from SharedPreferences or use default
@@ -19,11 +21,11 @@ class ApiService {
 
     final prefs = await SharedPreferences.getInstance();
     final savedIp = prefs.getString('serverIp');
-    final savedPort = prefs.getInt('serverPort') ?? 3000;
+    final savedPort = prefs.getInt('serverPort') ?? _defaultPort; // Usa costante
     
     _cachedBaseUrl = savedIp != null
         ? 'http://$savedIp:$savedPort/api'
-        : _defaultBaseUrl;
+        : 'http://$_defaultHost:$savedPort/api'; // Costruisce URL dinamicamente
     return _cachedBaseUrl!;
   }
 
@@ -32,7 +34,7 @@ class ApiService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('serverIp', ip);
     
-    final savedPort = prefs.getInt('serverPort') ?? 3000;
+    final savedPort = prefs.getInt('serverPort') ?? _defaultPort; // Usa costante
     _cachedBaseUrl = 'http://$ip:$savedPort/api';
   }
 
@@ -45,24 +47,26 @@ class ApiService {
     if (savedIp != null) {
       _cachedBaseUrl = 'http://$savedIp:$port/api';
     } else {
-      // Usa il default IP con la nuova porta
-      final uri = Uri.parse(_defaultBaseUrl);
-      _cachedBaseUrl = 'http://${uri.host}:$port/api';
+      // Usa il default host con la nuova porta
+      _cachedBaseUrl = 'http://$_defaultHost:$port/api'; // Usa costante
     }
   }
 
   // Get default server IP (without port)
   static String getDefaultServerIp() {
-    // Estrae l'IP da _defaultBaseUrl
-    final uri = Uri.parse(_defaultBaseUrl);
-    return uri.host;
+    return _defaultHost; // Ritorna costante
+  }
+
+  // Get default server port
+  static int getDefaultServerPort() {
+    return _defaultPort; // Nuovo metodo per ottenere porta default
   }
 
   // Test server connection and validate identity
   static Future<Map<String, dynamic>> pingServer(String ip, [int? port]) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final serverPort = port ?? prefs.getInt('serverPort') ?? 3000;
+      final serverPort = port ?? prefs.getInt('serverPort') ?? _defaultPort; // Usa costante
       
       final testUrl = 'http://$ip:$serverPort/api/ping';
       final response = await http
