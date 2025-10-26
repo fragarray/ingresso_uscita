@@ -1,13 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:window_manager/window_manager.dart';
+import 'dart:io';
 import 'providers/server_provider.dart';
 import 'services/tray_service.dart';
 import 'screens/home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Inizializza il system tray (se supportato)
-  // La configurazione della finestra su Windows è gestita nativamente
+  
+  // Inizializza il window manager per le piattaforme desktop
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    await windowManager.ensureInitialized();
+    
+    WindowOptions windowOptions = const WindowOptions(
+      size: Size(1200, 800),
+      center: true,
+      backgroundColor: Colors.transparent,
+      skipTaskbar: false,
+      titleBarStyle: TitleBarStyle.normal,
+      windowButtonVisibility: true,
+    );
+    
+    windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      await windowManager.focus();
+      await windowManager.setPreventClose(true);
+    });
+  }
   
   runApp(const ServerManagerApp());
 }
@@ -57,11 +77,15 @@ class ServerManagerHome extends StatefulWidget {
   State<ServerManagerHome> createState() => _ServerManagerHomeState();
 }
 
-class _ServerManagerHomeState extends State<ServerManagerHome> {
+class _ServerManagerHomeState extends State<ServerManagerHome> with WindowListener {
   @override
   void initState() {
     super.initState();
     _initializeApp();
+    // Registra il listener per gli eventi della finestra
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      windowManager.addListener(this);
+    }
   }
 
   Future<void> _initializeApp() async {
@@ -81,7 +105,30 @@ class _ServerManagerHomeState extends State<ServerManagerHome> {
   void dispose() {
     final serverProvider = context.read<ServerProvider>();
     serverProvider.removeListener(_updateTray);
+    // Rimuovi il listener per gli eventi della finestra
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      windowManager.removeListener(this);
+    }
     super.dispose();
+  }
+
+  // WindowListener methods
+  @override
+  void onWindowClose() async {
+    // Invece di chiudere, minimizza nella tray
+    await TrayService.hideToTray();
+  }
+
+  @override
+  void onWindowMinimize() {
+    // Gestisce la minimizzazione (può essere usato per eventi aggiuntivi)
+  }
+
+  @override
+  void onWindowRestore() {
+    // Gestisce il ripristino della finestra
+    final serverProvider = context.read<ServerProvider>();
+    serverProvider.setMinimized(false);
   }
 
   @override

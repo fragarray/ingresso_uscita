@@ -1,5 +1,6 @@
 import 'dart:io' show Platform, exit;
 import 'package:system_tray/system_tray.dart';
+import 'package:window_manager/window_manager.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../providers/server_provider.dart';
@@ -101,12 +102,22 @@ class TrayService {
 
   static Future<void> _showApplication() async {
     try {
-      if (Platform.isWindows) {
-        // Su Windows usa il metodo nativo per mostrare la finestra
+      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+        // Usa window_manager per mostrare la finestra su tutte le piattaforme desktop
         try {
-          await platform.invokeMethod('show');
+          await windowManager.show();
+          await windowManager.focus();
+          await windowManager.restore();
         } catch (e) {
-          debugPrint('⚠️ Metodo nativo non disponibile, la finestra è già visibile');
+          debugPrint('⚠️ Window manager fallito: $e');
+          // Fallback per Windows con metodo nativo
+          if (Platform.isWindows) {
+            try {
+              await platform.invokeMethod('show');
+            } catch (fallbackError) {
+              debugPrint('⚠️ Anche metodo nativo fallito: $fallbackError');
+            }
+          }
         }
       }
       _serverProvider?.setMinimized(false);
@@ -119,17 +130,21 @@ class TrayService {
   /// Nascondi l'applicazione nella tray
   static Future<void> hideToTray() async {
     try {
-      if (Platform.isWindows) {
-        // Su Windows usa il metodo nativo per nascondere la finestra
+      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+        // Usa window_manager per nascondere la finestra su tutte le piattaforme desktop
         try {
-          await platform.invokeMethod('hide');
+          await windowManager.hide();
         } catch (e) {
-          debugPrint('⚠️ Metodo nativo non disponibile per nascondere: $e');
+          debugPrint('⚠️ Window manager fallito: $e');
+          // Fallback per Windows con metodo nativo
+          if (Platform.isWindows) {
+            try {
+              await platform.invokeMethod('hide');
+            } catch (fallbackError) {
+              debugPrint('⚠️ Anche metodo nativo fallito: $fallbackError');
+            }
+          }
         }
-      } else if (Platform.isLinux || Platform.isMacOS) {
-        // Su Linux/macOS, marca come minimizzata
-        // Il window manager gestirà la minimizzazione
-        debugPrint('ℹ️ Linux/macOS: Minimizzazione gestita dal window manager');
       }
       _serverProvider?.setMinimized(true);
       debugPrint('✅ Applicazione minimizzata nella tray');
@@ -151,12 +166,19 @@ class TrayService {
     await _tray?.destroy();
     
     // Chiude l'applicazione usando il metodo appropriato per la piattaforma
-    if (Platform.isWindows) {
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
       try {
-        await platform.invokeMethod('exit');
+        await windowManager.destroy();
       } catch (e) {
-        debugPrint('⚠️ Impossibile chiudere via platform channel: $e');
-        // Fallback: usa system exit
+        debugPrint('⚠️ Window manager fallito per chiusura: $e');
+        // Fallback per Windows con metodo nativo
+        if (Platform.isWindows) {
+          try {
+            await platform.invokeMethod('exit');
+          } catch (fallbackError) {
+            debugPrint('⚠️ Anche metodo nativo fallito: $fallbackError');
+          }
+        }
         exit(0);
       }
     } else {

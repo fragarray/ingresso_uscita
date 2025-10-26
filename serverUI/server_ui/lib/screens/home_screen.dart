@@ -24,24 +24,9 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  /// Minimizza l'app nella tray invece di chiuderla
-  Future<bool> _onWillPop() async {
-    // Nascondi la finestra invece di chiuderla
-    await TrayService.hideToTray();
-    // Impedisci la chiusura
-    return false;
-  }
-
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false, // Impedisci chiusura predefinita
-      onPopInvokedWithResult: (didPop, result) async {
-        if (!didPop) {
-          await _onWillPop();
-        }
-      },
-      child: Scaffold(
+    return Scaffold(
         appBar: AppBar(
           title: const Text('Sinergy Work - Server Manager'),
           backgroundColor: Theme.of(context).primaryColor,
@@ -146,7 +131,6 @@ class _HomeScreenState extends State<HomeScreen> {
           );
         },
       ),
-      ), // Chiusura PopScope
     );
   }
 
@@ -213,8 +197,8 @@ class _HomeScreenState extends State<HomeScreen> {
         
         case 'minimize':
         if (TrayService.isSupported) {
-          // Minimizza nel tray (la finestra rimane aperta ma nascosta)
-          provider.setMinimized(true);
+          // Minimizza nel tray usando TrayService
+          await TrayService.hideToTray();
           await TrayService.updateTrayMenu();
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
