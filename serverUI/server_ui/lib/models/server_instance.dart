@@ -142,11 +142,10 @@ class ServerInstance {
       await _checkAndInstallDependencies();
       
       // Avvia il processo Node.js
-      addLog('🚀 Avvio processo Node.js...');
+      addLog('🚀 Avvio processo Node.js sulla porta $port...');
       _process = await Process.start(
         'node',
-        ['server.js'],
-        environment: {'PORT': port.toString()},
+        ['server.js', port.toString()], // Passa la porta come argomento
         workingDirectory: path.dirname(serverPath),
       );
 

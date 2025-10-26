@@ -9,7 +9,10 @@ const cron = require('node-cron');
 const nodemailer = require('nodemailer');
 
 const app = express();
-const port = 3000;
+
+// Porta del server - può essere specificata come argomento da riga di comando
+// Esempio: node server.js 3001
+const port = process.argv[2] ? parseInt(process.argv[2]) : 3000;
 
 // ==================== CONFIGURAZIONE ORARIO REPORT GIORNALIERO ====================
 // Formato: "HH:MM" (es: "00:05", "08:00", "18:30")

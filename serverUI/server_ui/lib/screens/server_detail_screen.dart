@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -20,15 +21,64 @@ class _ServerDetailScreenState extends State<ServerDetailScreen>
     with TickerProviderStateMixin {
   late TabController _tabController;
   final ScrollController _logScrollController = ScrollController();
+  Timer? _logUpdateTimer;
+  int _lastLogCount = 0;
+  bool _autoScroll = true;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    
+    // Listener per il tab corrente
+    _tabController.addListener(() {
+      if (_tabController.index == 1) { // Tab Log
+        _startLogMonitoring();
+      } else {
+        _stopLogMonitoring();
+      }
+    });
+    
+    // Listener per lo scroll manuale
+    _logScrollController.addListener(() {
+      if (_logScrollController.hasClients) {
+        final isAtBottom = _logScrollController.position.pixels >= 
+            _logScrollController.position.maxScrollExtent - 50;
+        if (_autoScroll != isAtBottom) {
+          setState(() {
+            _autoScroll = isAtBottom;
+          });
+        }
+      }
+    });
+  }
+
+  void _startLogMonitoring() {
+    _logUpdateTimer?.cancel();
+    _logUpdateTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      final provider = context.read<ServerProvider>();
+      final server = provider.getServer(widget.serverId);
+      
+      if (server != null && server.logs.length != _lastLogCount) {
+        _lastLogCount = server.logs.length;
+        setState(() {});
+        
+        if (_autoScroll && mounted) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _scrollToBottom(smooth: false);
+          });
+        }
+      }
+    });
+  }
+
+  void _stopLogMonitoring() {
+    _logUpdateTimer?.cancel();
   }
 
   @override
   void dispose() {
+    _stopLogMonitoring();
     _tabController.dispose();
     _logScrollController.dispose();
     super.dispose();
@@ -245,6 +295,40 @@ class _ServerDetailScreenState extends State<ServerDetailScreen>
                 'Log (${server.logs.length} righe)',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
+              const SizedBox(width: 16),
+              
+              // Indicatore auto-scroll
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _autoScroll ? Colors.green[100] : Colors.grey[300],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _autoScroll ? Colors.green : Colors.grey,
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _autoScroll ? Icons.toggle_on : Icons.toggle_off,
+                      size: 16,
+                      color: _autoScroll ? Colors.green[700] : Colors.grey[600],
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Auto-scroll',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: _autoScroll ? Colors.green[700] : Colors.grey[600],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
               const Spacer(),
               IconButton(
                 icon: const Icon(Icons.clear),
@@ -262,7 +346,12 @@ class _ServerDetailScreenState extends State<ServerDetailScreen>
               ),
               IconButton(
                 icon: const Icon(Icons.arrow_downward),
-                onPressed: _scrollToBottom,
+                onPressed: () {
+                  _scrollToBottom();
+                  setState(() {
+                    _autoScroll = true;
+                  });
+                },
                 tooltip: 'Vai in fondo',
               ),
             ],
@@ -281,36 +370,58 @@ class _ServerDetailScreenState extends State<ServerDetailScreen>
                     ),
                   ),
                 )
-              : ListView.builder(
-                  controller: _logScrollController,
-                  padding: const EdgeInsets.all(8),
-                  itemCount: server.logs.length,
-                  itemBuilder: (context, index) {
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
-                      margin: const EdgeInsets.only(bottom: 2),
-                      decoration: BoxDecoration(
-                        color: index.isEven 
-                            ? Colors.grey[50] 
-                            : Colors.white,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: SelectableText(
-                        server.logs[index],
-                        style: const TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 13,
+              : Container(
+                  color: Colors.grey[900],
+                  child: ListView.builder(
+                    controller: _logScrollController,
+                    padding: const EdgeInsets.all(12),
+                    itemCount: server.logs.length,
+                    itemBuilder: (context, index) {
+                      final logLine = server.logs[index];
+                      final isError = _isErrorLine(logLine);
+                      final isWarning = _isWarningLine(logLine);
+                      
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
                         ),
-                      ),
-                    );
-                  },
+                        margin: const EdgeInsets.only(bottom: 1),
+                        child: SelectableText(
+                          logLine,
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            height: 1.4,
+                            color: isError 
+                                ? Colors.red[300] 
+                                : isWarning 
+                                    ? Colors.yellow[700]
+                                    : Colors.green[300],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 ),
         ),
       ],
     );
+  }
+
+  bool _isErrorLine(String line) {
+    final lowerLine = line.toLowerCase();
+    return lowerLine.contains('error') || 
+           lowerLine.contains('❌') ||
+           lowerLine.contains('exception') ||
+           lowerLine.contains('failed');
+  }
+
+  bool _isWarningLine(String line) {
+    final lowerLine = line.toLowerCase();
+    return lowerLine.contains('warning') || 
+           lowerLine.contains('warn') ||
+           lowerLine.contains('⚠');
   }
 
   Widget _buildConfigTab(ServerInstance server, ServerProvider provider) {
@@ -406,13 +517,19 @@ class _ServerDetailScreenState extends State<ServerDetailScreen>
         '${dateTime.minute.toString().padLeft(2, '0')}';
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool smooth = true}) {
     if (_logScrollController.hasClients) {
-      _logScrollController.animateTo(
-        _logScrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
+      if (smooth) {
+        _logScrollController.animateTo(
+          _logScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      } else {
+        _logScrollController.jumpTo(
+          _logScrollController.position.maxScrollExtent,
+        );
+      }
     }
   }
 

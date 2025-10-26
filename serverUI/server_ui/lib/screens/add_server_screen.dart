@@ -20,9 +20,8 @@ class _AddServerScreenState extends State<AddServerScreen> {
   
   bool _isLoading = false;
 
-  // Percorso del server.js integrato nell'applicazione
-  static const String _integratedServerPath = '/home/tom/ingrARM/ingresso_uscita/serverUI/server/server.js';
-  static const String _templateDatabasePath = '/home/tom/ingrARM/ingresso_uscita/serverUI/server/database.db';
+  // Percorso della cartella del server integrato nell'applicazione
+  static const String _integratedServerPath = '/home/tom/ingrARM/ingresso_uscita/serverUI/server';
 
   @override
   void initState() {
@@ -56,41 +55,82 @@ class _AddServerScreenState extends State<AddServerScreen> {
 
   /// Crea una cartella dedicata per il server nella home dell'utente
   /// e copia il database template
-  Future<String> _createServerDirectory(String serverName) async {
-    // Ottieni la directory home dell'utente
-    final homeDir = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '/home/tom';
-    
-    // Crea un nome sicuro per la cartella (rimuovi caratteri speciali)
-    final safeName = serverName
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9-_]'), '_')
-        .replaceAll(RegExp(r'_+'), '_');
-    
-    // Percorso della cartella del server
-    final serverDir = path.join(homeDir, 'IngressoUscita_Servers', safeName);
-    
-    // Crea la directory se non esiste
-    final directory = Directory(serverDir);
-    if (!directory.existsSync()) {
-      directory.createSync(recursive: true);
-    }
-    
-    // Percorso del database per questo server
-    final dbPath = path.join(serverDir, 'database.db');
-    
-    // Copia il database template se non esiste
-    final dbFile = File(dbPath);
-    if (!dbFile.existsSync()) {
-      final templateDb = File(_templateDatabasePath);
-      if (templateDb.existsSync()) {
-        await templateDb.copy(dbPath);
-      } else {
-        // Crea un database vuoto se il template non esiste
-        dbFile.createSync();
+  // Crea la cartella del server nella home dell'utente e copia tutti i file necessari
+  Future<String> _createServerDirectory(String name) async {
+    try {
+      final homeDir = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
+      final serversBaseDir = Directory(path.join(homeDir, 'IngressoUscita_Servers'));
+      
+      // Crea la cartella base se non esiste
+      if (!await serversBaseDir.exists()) {
+        await serversBaseDir.create(recursive: true);
       }
+      
+      // Crea la cartella del server specifico
+      final serverDir = Directory(path.join(serversBaseDir.path, name));
+      if (await serverDir.exists()) {
+        throw Exception('Un server con questo nome esiste già');
+      }
+      
+      await serverDir.create(recursive: true);
+      
+      // Lista dei file essenziali da copiare
+      final essentialFiles = [
+        'server.js',
+        'db.js',
+        'config.js',
+        'package.json',
+        'package-lock.json',
+      ];
+      
+      // Copia i file essenziali
+      for (final fileName in essentialFiles) {
+        final sourceFile = File(path.join(_integratedServerPath, fileName));
+        final targetFile = File(path.join(serverDir.path, fileName));
+        
+        if (await sourceFile.exists()) {
+          await sourceFile.copy(targetFile.path);
+          print('✓ Copiato: $fileName');
+        } else {
+          print('⚠ File non trovato: $fileName');
+        }
+      }
+      
+      // Copia la cartella routes
+      final sourceRoutesDir = Directory(path.join(_integratedServerPath, 'routes'));
+      final targetRoutesDir = Directory(path.join(serverDir.path, 'routes'));
+      
+      if (await sourceRoutesDir.exists()) {
+        await targetRoutesDir.create(recursive: true);
+        await for (final file in sourceRoutesDir.list()) {
+          if (file is File) {
+            final fileName = path.basename(file.path);
+            await file.copy(path.join(targetRoutesDir.path, fileName));
+            print('✓ Copiato: routes/$fileName');
+          }
+        }
+      }
+      
+      // Crea le cartelle necessarie
+      final dirsToCreate = ['reports', 'temp', 'backups'];
+      for (final dirName in dirsToCreate) {
+        final dir = Directory(path.join(serverDir.path, dirName));
+        await dir.create(recursive: true);
+        print('✓ Creata cartella: $dirName');
+      }
+      
+      // NON copiare il database - il server ne crea uno nuovo automaticamente
+      // NON copiare node_modules - verrà creato da npm install
+      
+      // Il database verrà creato dal modulo db.js nella cartella del server
+      final databasePath = path.join(serverDir.path, 'database.db');
+      
+      print('✅ Cartella server creata: ${serverDir.path}');
+      return databasePath;
+    } catch (e) {
+      print('❌ Errore nella creazione della cartella: $e');
+      rethrow;
     }
-    
-    return dbPath;
   }
 
   @override
@@ -279,13 +319,17 @@ class _AddServerScreenState extends State<AddServerScreen> {
       // Crea la cartella dedicata e ottieni il percorso del database
       final databasePath = await _createServerDirectory(serverName);
       
+      // Il serverPath punta alla cartella dell'istanza del server
+      final homeDir = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
+      final serverInstancePath = path.join(homeDir, 'IngressoUscita_Servers', serverName, 'server.js');
+      
       // Crea l'istanza del server
       final server = ServerInstance(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
         name: serverName,
         port: port,
         databasePath: databasePath,
-        serverPath: _integratedServerPath,
+        serverPath: serverInstancePath,
       );
 
       final provider = context.read<ServerProvider>();
