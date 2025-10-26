@@ -9,8 +9,9 @@ import 'screens/home_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Inizializza il window manager per le piattaforme desktop
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+  // Inizializza il window manager SOLO per Linux/macOS
+  // Windows usa i controlli nativi di default senza window_manager
+  if (Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     
     WindowOptions windowOptions = const WindowOptions(
@@ -18,8 +19,7 @@ void main() async {
       center: true,
       backgroundColor: Colors.transparent,
       skipTaskbar: false,
-      titleBarStyle: TitleBarStyle.normal,
-      windowButtonVisibility: true,
+      titleBarStyle: TitleBarStyle.hidden,
     );
     
     windowManager.waitUntilReadyToShow(windowOptions, () async {
@@ -82,8 +82,9 @@ class _ServerManagerHomeState extends State<ServerManagerHome> with WindowListen
   void initState() {
     super.initState();
     _initializeApp();
-    // Registra il listener per gli eventi della finestra
-    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    // Registra il listener solo su Linux/macOS
+    // Windows usa il codice nativo in flutter_window.cpp
+    if (Platform.isLinux || Platform.isMacOS) {
       windowManager.addListener(this);
     }
   }
@@ -105,18 +106,21 @@ class _ServerManagerHomeState extends State<ServerManagerHome> with WindowListen
   void dispose() {
     final serverProvider = context.read<ServerProvider>();
     serverProvider.removeListener(_updateTray);
-    // Rimuovi il listener per gli eventi della finestra
-    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    // Rimuovi il listener solo su Linux/macOS
+    if (Platform.isLinux || Platform.isMacOS) {
       windowManager.removeListener(this);
     }
     super.dispose();
   }
 
-  // WindowListener methods
+  // WindowListener methods - Solo per Linux/macOS
+  // Windows usa il codice nativo C++ per intercettare WM_CLOSE
   @override
   void onWindowClose() async {
-    // Invece di chiudere, minimizza nella tray
-    await TrayService.hideToTray();
+    if (Platform.isLinux || Platform.isMacOS) {
+      // Invece di chiudere, minimizza nella tray
+      await TrayService.hideToTray();
+    }
   }
 
   @override

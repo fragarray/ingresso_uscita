@@ -102,22 +102,21 @@ class TrayService {
 
   static Future<void> _showApplication() async {
     try {
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-        // Usa window_manager per mostrare la finestra su tutte le piattaforme desktop
+      if (Platform.isWindows) {
+        // Su Windows usa il metodo nativo (non window_manager)
+        try {
+          await platform.invokeMethod('show');
+        } catch (e) {
+          debugPrint('⚠️ Metodo nativo fallito: $e');
+        }
+      } else if (Platform.isLinux || Platform.isMacOS) {
+        // Su Linux/macOS usa window_manager
         try {
           await windowManager.show();
           await windowManager.focus();
           await windowManager.restore();
         } catch (e) {
           debugPrint('⚠️ Window manager fallito: $e');
-          // Fallback per Windows con metodo nativo
-          if (Platform.isWindows) {
-            try {
-              await platform.invokeMethod('show');
-            } catch (fallbackError) {
-              debugPrint('⚠️ Anche metodo nativo fallito: $fallbackError');
-            }
-          }
         }
       }
       _serverProvider?.setMinimized(false);
@@ -130,20 +129,19 @@ class TrayService {
   /// Nascondi l'applicazione nella tray
   static Future<void> hideToTray() async {
     try {
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-        // Usa window_manager per nascondere la finestra su tutte le piattaforme desktop
+      if (Platform.isWindows) {
+        // Su Windows usa il metodo nativo (non window_manager)
+        try {
+          await platform.invokeMethod('hide');
+        } catch (e) {
+          debugPrint('⚠️ Metodo nativo fallito: $e');
+        }
+      } else if (Platform.isLinux || Platform.isMacOS) {
+        // Su Linux/macOS usa window_manager
         try {
           await windowManager.hide();
         } catch (e) {
           debugPrint('⚠️ Window manager fallito: $e');
-          // Fallback per Windows con metodo nativo
-          if (Platform.isWindows) {
-            try {
-              await platform.invokeMethod('hide');
-            } catch (fallbackError) {
-              debugPrint('⚠️ Anche metodo nativo fallito: $fallbackError');
-            }
-          }
         }
       }
       _serverProvider?.setMinimized(true);
@@ -166,19 +164,20 @@ class TrayService {
     await _tray?.destroy();
     
     // Chiude l'applicazione usando il metodo appropriato per la piattaforma
-    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    if (Platform.isWindows) {
+      // Su Windows usa il metodo nativo
+      try {
+        await platform.invokeMethod('exit');
+      } catch (e) {
+        debugPrint('⚠️ Metodo nativo fallito: $e');
+        exit(0);
+      }
+    } else if (Platform.isLinux || Platform.isMacOS) {
+      // Su Linux/macOS usa window_manager
       try {
         await windowManager.destroy();
       } catch (e) {
-        debugPrint('⚠️ Window manager fallito per chiusura: $e');
-        // Fallback per Windows con metodo nativo
-        if (Platform.isWindows) {
-          try {
-            await platform.invokeMethod('exit');
-          } catch (fallbackError) {
-            debugPrint('⚠️ Anche metodo nativo fallito: $fallbackError');
-          }
-        }
+        debugPrint('⚠️ Window manager fallito: $e');
         exit(0);
       }
     } else {
