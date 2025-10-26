@@ -1,35 +1,39 @@
-# Server Manager UI
+# 🖥️ Sinergy Work - Server Manager UI
 
-Applicazione desktop Flutter per la gestione centralizzata di server Node.js.
+Applicazione desktop per gestire uno o più server Node.js di Sinergy Work.
 
-## Funzionalità
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-blue)
+![Flutter](https://img.shields.io/badge/Flutter-3.9.2-blue)
 
-- **Gestione Multipla Server**: Crea e gestisci multiple istanze di server Node.js
-- **Interfaccia Grafica**: Griglia di carte per visualizzare lo stato di ogni server
-- **Controlli Server**: Avvia, ferma e riavvia i server con un click
-- **Monitoraggio Real-time**: Visualizza log e stato dei server in tempo reale
-- **System Tray**: Minimizza l'applicazione nel system tray per continuare a monitorare i server
-- **Configurazione Persistente**: Salva automaticamente le configurazioni dei server
+## ✨ Funzionalità
 
-## Caratteristiche dell'Interfaccia
+- ✅ **Gestione Multi-Server**: Gestisci più istanze del server Sinergy Work
+- ✅ **Avvio/Arresto**: Controlla i server con un click
+- ✅ **Monitoraggio Real-time**: Visualizza log e stato in tempo reale
+- ✅ **System Tray**: Minimizza nel system tray (quando supportato)
+- ✅ **Auto-Dependencies**: Installa automaticamente le dipendenze npm
+- ✅ **Template Integrato**: Server template incluso come asset
+- ✅ **Cross-Platform**: Compatibile con Windows, Linux e macOS
 
-### Schermata Principale
-- Griglia di carte che mostrano tutti i server configurati
-- Carta "Aggiungi Server" per creare nuovi server
-- Indicatore dello stato di ogni server (fermato, in esecuzione, errore, ecc.)
-- Controlli rapidi per avviare/fermare i server
+## 🚀 Requisiti
 
-### Gestione Server
-- Configurazione porta di rete
-- Selezione cartella di lavoro del server
-- Visualizzazione log in tempo reale
-- Backup e ripristino database (funzionalità future)
+### Prerequisiti
+- **Flutter SDK 3.9.2+** 
+- **Node.js 16+** (per eseguire i server)
+- **npm** (incluso con Node.js)
 
-### System Tray
-- L'applicazione continua a funzionare in background
-- Menu contestuale per accesso rapido alle funzioni
-- Notifiche sullo stato dei server
-- Possibilità di fermare tutti i server prima della chiusura
+### Windows
+- Windows 10/11
+- Node.js deve essere nel PATH di sistema
+
+### Linux
+- Ubuntu 20.04+ o equivalente
+- GTK 3.0+
+- Opzionale: `libappindicator3-dev` (per system tray)
+
+### macOS
+- macOS 10.14+
+- Xcode Command Line Tools
 
 ## Installazione
 
@@ -71,18 +75,37 @@ lib/
 ├── services/
 │   └── tray_service.dart       # Gestione system tray
 └── main.dart                   # Entry point applicazione
+
+assets/
+└── server_template/            # Template server Node.js (integrato)
+    ├── server.js
+    ├── db.js
+    ├── config.js
+    ├── package.json
+    └── routes/
+        └── worksites.js
 ```
 
 ## Utilizzo
 
 ### Creazione Nuovo Server
 
-1. Clicca sulla carta "Aggiungi Server" nella schermata principale
+Quando crei un nuovo server, l'applicazione:
+
+1. **Estrae** i file template dagli asset integrati
+2. **Crea** una nuova cartella in `%USERPROFILE%\IngressoUscita_Servers\<nome>`
+3. **Copia** tutti i file necessari (server.js, db.js, routes, ecc.)
+4. **Installa** automaticamente le dipendenze con `npm install`
+5. **Avvia** il server sulla porta specificata
+
+**Passaggi**:
+1. Clicca sulla carta "Aggiungi Server"
 2. Inserisci:
-   - Nome descrittivo del server
-   - Porta di rete (viene suggerita una porta libera)
-   - Percorso alla cartella contenente server.js
+   - Nome descrittivo del server (es: "Produzione", "Test")
+   - Porta di rete (viene suggerita una porta libera, es: 3000)
 3. Clicca "Crea Server"
+
+**Nota**: Non serve specificare percorsi! I file template sono integrati nell'app.
 
 ### Avvio/Arresto Server
 

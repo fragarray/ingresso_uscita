@@ -20,9 +20,6 @@ class _AddServerScreenState extends State<AddServerScreen> {
   
   bool _isLoading = false;
 
-  // Percorso della cartella del server integrato nell'applicazione
-  static const String _integratedServerPath = '/home/tom/ingrARM/ingresso_uscita/serverUI/server';
-
   @override
   void initState() {
     super.initState();
@@ -54,8 +51,7 @@ class _AddServerScreenState extends State<AddServerScreen> {
   }
 
   /// Crea una cartella dedicata per il server nella home dell'utente
-  /// e copia il database template
-  // Crea la cartella del server nella home dell'utente e copia tutti i file necessari
+  /// e copia i file template dagli asset integrati nell'applicazione
   Future<String> _createServerDirectory(String name) async {
     try {
       final homeDir = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'] ?? '';
@@ -74,42 +70,39 @@ class _AddServerScreenState extends State<AddServerScreen> {
       
       await serverDir.create(recursive: true);
       
-      // Lista dei file essenziali da copiare
-      final essentialFiles = [
-        'server.js',
-        'db.js',
-        'config.js',
-        'package.json',
-        'package-lock.json',
-      ];
+      print('📂 Percorso destinazione: ${serverDir.path}');
+      print('📦 Copia file template dagli asset integrati...');
       
-      // Copia i file essenziali
-      for (final fileName in essentialFiles) {
-        final sourceFile = File(path.join(_integratedServerPath, fileName));
-        final targetFile = File(path.join(serverDir.path, fileName));
+      // Lista dei file essenziali da copiare dagli asset
+      final essentialFiles = {
+        'server.js': 'assets/server_template/server.js',
+        'db.js': 'assets/server_template/db.js',
+        'config.js': 'assets/server_template/config.js',
+        'package.json': 'assets/server_template/package.json',
+      };
+      
+      // Copia i file essenziali dagli asset
+      for (final entry in essentialFiles.entries) {
+        final fileName = entry.key;
+        final assetPath = entry.value;
         
-        if (await sourceFile.exists()) {
-          await sourceFile.copy(targetFile.path);
+        try {
+          // Leggi il file dagli asset
+          final assetContent = await rootBundle.loadString(assetPath);
+          
+          // Scrivi il file nella directory del server
+          final targetFile = File(path.join(serverDir.path, fileName));
+          await targetFile.writeAsString(assetContent);
+          
           print('✓ Copiato: $fileName');
-        } else {
-          print('⚠ File non trovato: $fileName');
+        } catch (e) {
+          print('⚠️ Errore copiando $fileName: $e');
+          throw Exception('Impossibile copiare $fileName dagli asset');
         }
       }
       
-      // Copia la cartella routes
-      final sourceRoutesDir = Directory(path.join(_integratedServerPath, 'routes'));
-      final targetRoutesDir = Directory(path.join(serverDir.path, 'routes'));
-      
-      if (await sourceRoutesDir.exists()) {
-        await targetRoutesDir.create(recursive: true);
-        await for (final file in sourceRoutesDir.list()) {
-          if (file is File) {
-            final fileName = path.basename(file.path);
-            await file.copy(path.join(targetRoutesDir.path, fileName));
-            print('✓ Copiato: routes/$fileName');
-          }
-        }
-      }
+      // Copia i file della cartella routes dagli asset
+      await _copyRoutesFromAssets(serverDir.path);
       
       // Crea le cartelle necessarie
       final dirsToCreate = ['reports', 'temp', 'backups'];
@@ -119,10 +112,7 @@ class _AddServerScreenState extends State<AddServerScreen> {
         print('✓ Creata cartella: $dirName');
       }
       
-      // NON copiare il database - il server ne crea uno nuovo automaticamente
-      // NON copiare node_modules - verrà creato da npm install
-      
-      // Il database verrà creato dal modulo db.js nella cartella del server
+      // Il database verrà creato dal modulo db.js quando il server si avvia
       final databasePath = path.join(serverDir.path, 'database.db');
       
       print('✅ Cartella server creata: ${serverDir.path}');
@@ -130,6 +120,32 @@ class _AddServerScreenState extends State<AddServerScreen> {
     } catch (e) {
       print('❌ Errore nella creazione della cartella: $e');
       rethrow;
+    }
+  }
+  
+  /// Copia i file della cartella routes dagli asset
+  Future<void> _copyRoutesFromAssets(String serverPath) async {
+    final routesDir = Directory(path.join(serverPath, 'routes'));
+    await routesDir.create(recursive: true);
+    
+    // Lista dei file routes da copiare (basata sui file realmente presenti)
+    final routeFiles = [
+      'worksites.js',
+    ];
+    
+    for (final fileName in routeFiles) {
+      try {
+        final assetPath = 'assets/server_template/routes/$fileName';
+        final assetContent = await rootBundle.loadString(assetPath);
+        
+        final targetFile = File(path.join(routesDir.path, fileName));
+        await targetFile.writeAsString(assetContent);
+        
+        print('✓ Copiato: routes/$fileName');
+      } catch (e) {
+        print('❌ Errore copiando routes/$fileName: $e');
+        throw Exception('Impossibile copiare routes/$fileName dagli asset');
+      }
     }
   }
 

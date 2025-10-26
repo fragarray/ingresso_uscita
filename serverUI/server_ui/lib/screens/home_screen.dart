@@ -1,11 +1,12 @@
+import 'dart:io' show exit;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:window_manager/window_manager.dart';
 import '../providers/server_provider.dart';
 import '../widgets/server_card.dart';
 import '../widgets/add_server_card.dart';
 import '../services/tray_service.dart';
 import 'add_server_screen.dart';
+import 'dependency_check_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -14,84 +15,37 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with WindowListener {
+class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    windowManager.addListener(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<ServerProvider>().loadServers();
     });
   }
 
-  @override
-  void dispose() {
-    windowManager.removeListener(this);
-    super.dispose();
-  }
-
-  @override
-  void onWindowClose() async {
-    // Impedisce la chiusura diretta e minimizza nel system tray se ci sono server attivi
-    final serverProvider = context.read<ServerProvider>();
-    
-    if (serverProvider.hasRunningServers && TrayService.isSupported) {
-      await windowManager.hide();
-      serverProvider.setMinimized(true);
-      await TrayService.updateTrayMenu();
-      
-      // Mostra notifica che l'app è stata minimizzata
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Applicazione minimizzata nel system tray'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-    } else if (serverProvider.hasRunningServers && !TrayService.isSupported) {
-      // Se non c'è system tray, chiedi conferma prima di chiudere con server attivi
-      final shouldClose = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Server attivi'),
-          content: const Text(
-            'Ci sono server ancora in esecuzione. '
-            'Chiudendo l\'applicazione, tutti i server verranno fermati. '
-            'Continuare?'
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Annulla'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Chiudi'),
-              style: TextButton.styleFrom(foregroundColor: Colors.red),
-            ),
-          ],
-        ),
-      );
-      
-      if (shouldClose == true) {
-        await serverProvider.stopAllServers();
-        await TrayService.dispose();
-        await windowManager.destroy();
-      }
-    } else {
-      await TrayService.dispose();
-      await windowManager.destroy();
-    }
+  /// Minimizza l'app nella tray invece di chiuderla
+  Future<bool> _onWillPop() async {
+    // Nascondi la finestra invece di chiuderla
+    await TrayService.hideToTray();
+    // Impedisci la chiusura
+    return false;
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Server Manager'),
-        backgroundColor: Theme.of(context).primaryColor,
-        foregroundColor: Colors.white,
+    return PopScope(
+      canPop: false, // Impedisci chiusura predefinita
+      onPopInvokedWithResult: (didPop, result) async {
+        if (!didPop) {
+          await _onWillPop();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Sinergy Work - Server Manager'),
+          backgroundColor: Theme.of(context).primaryColor,
+          foregroundColor: Colors.white,
         actions: [
           Consumer<ServerProvider>(
             builder: (context, provider, child) {
@@ -119,6 +73,17 @@ class _HomeScreenState extends State<HomeScreen> with WindowListener {
           PopupMenuButton<String>(
             onSelected: _handleMenuSelection,
             itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'check_dependencies',
+                child: Row(
+                  children: [
+                    Icon(Icons.fact_check, color: Colors.blue),
+                    SizedBox(width: 8),
+                    Text('Verifica Dipendenze'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'stop_all',
                 child: Row(
@@ -181,6 +146,7 @@ class _HomeScreenState extends State<HomeScreen> with WindowListener {
           );
         },
       ),
+      ), // Chiusura PopScope
     );
   }
 
@@ -226,6 +192,15 @@ class _HomeScreenState extends State<HomeScreen> with WindowListener {
     final provider = context.read<ServerProvider>();
     
     switch (value) {
+      case 'check_dependencies':
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const DependencyCheckScreen(),
+          ),
+        );
+        break;
+
       case 'stop_all':
         await provider.stopAllServers();
         await TrayService.updateTrayMenu();
@@ -238,9 +213,17 @@ class _HomeScreenState extends State<HomeScreen> with WindowListener {
         
         case 'minimize':
         if (TrayService.isSupported) {
-          await windowManager.hide();
+          // Minimizza nel tray (la finestra rimane aperta ma nascosta)
           provider.setMinimized(true);
           await TrayService.updateTrayMenu();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Applicazione minimizzata nel system tray'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
         }
         break;      case 'exit':
         await _confirmExit();
@@ -277,11 +260,11 @@ class _HomeScreenState extends State<HomeScreen> with WindowListener {
       if (shouldExit == true) {
         await provider.stopAllServers();
         await TrayService.dispose();
-        await windowManager.destroy();
+        exit(0);
       }
     } else {
       await TrayService.dispose();
-      await windowManager.destroy();
+      exit(0);
     }
   }
 

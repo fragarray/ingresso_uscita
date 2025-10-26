@@ -1,6 +1,8 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <flutter/method_channel.h>
+#include <flutter/standard_method_codec.h>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -26,6 +28,9 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+
+  // Configura il MethodChannel per il controllo della finestra
+  SetupMethodChannel();
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
     this->Show();
@@ -65,7 +70,39 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
+    case WM_CLOSE:
+      // Quando l'utente clicca X, nascondi la finestra invece di chiuderla
+      ::ShowWindow(hwnd, SW_HIDE);
+      return 0; // Impedisce la chiusura predefinita
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+}
+
+void FlutterWindow::SetupMethodChannel() {
+  flutter::MethodChannel<> channel(
+      flutter_controller_->engine()->messenger(),
+      "com.fragarray.sinergywork/window",
+      &flutter::StandardMethodCodec::GetInstance());
+
+  channel.SetMethodCallHandler(
+      [this](const flutter::MethodCall<>& call,
+             std::unique_ptr<flutter::MethodResult<>> result) {
+        if (call.method_name() == "hide") {
+          // Nascondi la finestra
+          ::ShowWindow(GetHandle(), SW_HIDE);
+          result->Success();
+        } else if (call.method_name() == "show") {
+          // Mostra la finestra
+          ::ShowWindow(GetHandle(), SW_SHOW);
+          ::SetForegroundWindow(GetHandle());
+          result->Success();
+        } else if (call.method_name() == "exit") {
+          // Chiudi l'applicazione
+          ::PostQuitMessage(0);
+          result->Success();
+        } else {
+          result->NotImplemented();
+        }
+      });
 }

@@ -1,24 +1,44 @@
+import 'dart:io' show Platform, exit;
 import 'package:system_tray/system_tray.dart';
-import 'package:window_manager/window_manager.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import '../providers/server_provider.dart';
 
 class TrayService {
   static SystemTray? _tray;
   static ServerProvider? _serverProvider;
   static bool _isSupported = false;
+  static const platform = MethodChannel('com.fragarray.sinergywork/window');
 
   static Future<void> initialize(ServerProvider serverProvider) async {
     _serverProvider = serverProvider;
+    
+    // System tray non sempre funziona bene su tutte le piattaforme Windows
+    // Proviamo ad inizializzarlo, ma gestiamo gracefully l'errore
+    if (!Platform.isWindows && !Platform.isLinux && !Platform.isMacOS) {
+      debugPrint('⚠️ System tray non supportato su questa piattaforma');
+      _isSupported = false;
+      return;
+    }
     
     try {
       _tray = SystemTray();
 
       // Configura l'icona del system tray
       await _tray!.initSystemTray(
-        title: "Server Manager",
+        title: "Sinergy Work Server",
         iconPath: _getIconPath(),
       );
+
+      // Registra il callback per il click sull'icona del tray
+      _tray!.registerSystemTrayEventHandler((eventName) {
+        debugPrint('System tray event: $eventName');
+        if (eventName == kSystemTrayEventClick) {
+          _showApplication();
+        } else if (eventName == kSystemTrayEventRightClick) {
+          _tray!.popUpContextMenu();
+        }
+      });
 
       // Crea il menu del system tray
       await _createTrayMenu();
@@ -27,6 +47,7 @@ class TrayService {
       debugPrint('✅ System tray inizializzato con successo');
     } catch (e) {
       debugPrint('⚠️ System tray non disponibile: $e');
+      debugPrint('   L\'applicazione funzionerà normalmente senza tray icon');
       _isSupported = false;
       _tray = null;
     }
@@ -79,9 +100,42 @@ class TrayService {
   }
 
   static Future<void> _showApplication() async {
-    await windowManager.show();
-    await windowManager.focus();
-    _serverProvider?.setMinimized(false);
+    try {
+      if (Platform.isWindows) {
+        // Su Windows usa il metodo nativo per mostrare la finestra
+        try {
+          await platform.invokeMethod('show');
+        } catch (e) {
+          debugPrint('⚠️ Metodo nativo non disponibile, la finestra è già visibile');
+        }
+      }
+      _serverProvider?.setMinimized(false);
+      debugPrint('✅ Applicazione mostrata');
+    } catch (e) {
+      debugPrint('⚠️ Errore mostrando applicazione: $e');
+    }
+  }
+
+  /// Nascondi l'applicazione nella tray
+  static Future<void> hideToTray() async {
+    try {
+      if (Platform.isWindows) {
+        // Su Windows usa il metodo nativo per nascondere la finestra
+        try {
+          await platform.invokeMethod('hide');
+        } catch (e) {
+          debugPrint('⚠️ Metodo nativo non disponibile per nascondere: $e');
+        }
+      } else if (Platform.isLinux || Platform.isMacOS) {
+        // Su Linux/macOS, marca come minimizzata
+        // Il window manager gestirà la minimizzazione
+        debugPrint('ℹ️ Linux/macOS: Minimizzazione gestita dal window manager');
+      }
+      _serverProvider?.setMinimized(true);
+      debugPrint('✅ Applicazione minimizzata nella tray');
+    } catch (e) {
+      debugPrint('⚠️ Errore nascondendo applicazione: $e');
+    }
   }
 
   static Future<void> _stopAllServers() async {
@@ -96,13 +150,26 @@ class TrayService {
     // Pulisce il system tray
     await _tray?.destroy();
     
-    // Chiude l'applicazione
-    await windowManager.destroy();
+    // Chiude l'applicazione usando il metodo appropriato per la piattaforma
+    if (Platform.isWindows) {
+      try {
+        await platform.invokeMethod('exit');
+      } catch (e) {
+        debugPrint('⚠️ Impossibile chiudere via platform channel: $e');
+        // Fallback: usa system exit
+        exit(0);
+      }
+    } else {
+      exit(0);
+    }
   }
 
   static String _getIconPath() {
     // Percorso dell'icona del system tray
-    // Dovresti sostituire questo con il percorso effettivo della tua icona
+    // Su Windows cerca l'icona nella cartella assets
+    if (Platform.isWindows) {
+      return 'assets/images/tray_icon.ico';
+    }
     return 'assets/images/tray_icon.png';
   }
 

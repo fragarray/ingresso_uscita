@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 
 enum ServerStatus {
@@ -141,23 +142,51 @@ class ServerInstance {
       // Controlla e installa le dipendenze se necessarie
       await _checkAndInstallDependencies();
       
+      // Determina il comando corretto per la piattaforma
+      String nodeCommand = 'node';
+      if (Platform.isWindows) {
+        // Su Windows, verifica se node è nel PATH
+        try {
+          final result = await Process.run('where', ['node']);
+          if (result.exitCode != 0) {
+            throw Exception('Node.js non trovato nel PATH');
+          }
+          addLog('✅ Node.js trovato: ${result.stdout.toString().trim()}');
+        } catch (e) {
+          addLog('❌ Errore: Node.js non è installato o non è nel PATH');
+          throw Exception('Node.js non installato');
+        }
+      }
+      
       // Avvia il processo Node.js
       addLog('🚀 Avvio processo Node.js sulla porta $port...');
+      addLog('   Directory: ${path.dirname(serverPath)}');
+      addLog('   Comando: $nodeCommand server.js $port');
+      
       _process = await Process.start(
-        'node',
+        nodeCommand,
         ['server.js', port.toString()], // Passa la porta come argomento
         workingDirectory: path.dirname(serverPath),
+        runInShell: Platform.isWindows, // Su Windows usa shell per miglior compatibilità
       );
 
       // Ascolta l'output del processo
       _process!.stdout.listen((data) {
         final output = String.fromCharCodes(data);
-        addLog(output.trim());
+        for (var line in output.split('\n')) {
+          if (line.trim().isNotEmpty) {
+            addLog(line.trim());
+          }
+        }
       });
 
       _process!.stderr.listen((data) {
         final output = String.fromCharCodes(data);
-        addLog('ERROR: ${output.trim()}');
+        for (var line in output.split('\n')) {
+          if (line.trim().isNotEmpty) {
+            addLog('⚠️ ${line.trim()}');
+          }
+        }
       });
 
       // Controlla quando il processo termina
@@ -176,6 +205,7 @@ class ServerInstance {
       status = ServerStatus.error;
       errorMessage = e.toString();
       addLog('❌ Errore nell\'avvio del server: $e');
+      debugPrint('Stacktrace: ${StackTrace.current}');
     }
   }
 
@@ -188,8 +218,31 @@ class ServerInstance {
       addLog('🛑 Arresto server in corso...');
 
       if (_process != null) {
-        _process!.kill();
-        await _process!.exitCode;
+        // Su Windows, usa kill con segnale SIGTERM se possibile
+        if (Platform.isWindows) {
+          // Windows non supporta SIGTERM, usa kill direttamente
+          _process!.kill(ProcessSignal.sigkill);
+        } else {
+          _process!.kill(ProcessSignal.sigterm);
+        }
+        
+        // Aspetta un po' per la terminazione graceful
+        await Future.delayed(const Duration(seconds: 2));
+        
+        // Se ancora in esecuzione, forza kill
+        try {
+          _process!.kill(ProcessSignal.sigkill);
+        } catch (e) {
+          // Processo già terminato
+        }
+        
+        await _process!.exitCode.timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {
+            addLog('⚠️ Timeout durante arresto, processo forzatamente terminato');
+            return -1;
+          },
+        );
         _process = null;
       }
 
@@ -211,17 +264,27 @@ class ServerInstance {
     if (!nodeModulesDir.existsSync()) {
       addLog('📦 Installazione dipendenze npm in corso...');
       
-      final installProcess = await Process.run(
-        'npm',
-        ['install'],
-        workingDirectory: serverDir,
-      );
+      // Determina il comando npm corretto per la piattaforma
+      String npmCommand = Platform.isWindows ? 'npm.cmd' : 'npm';
       
-      if (installProcess.exitCode == 0) {
-        addLog('✅ Dipendenze installate correttamente');
-      } else {
-        addLog('❌ Errore installazione dipendenze: ${installProcess.stderr}');
-        throw Exception('Errore installazione dipendenze npm');
+      try {
+        final installProcess = await Process.run(
+          npmCommand,
+          ['install'],
+          workingDirectory: serverDir,
+          runInShell: Platform.isWindows,
+        );
+        
+        if (installProcess.exitCode == 0) {
+          addLog('✅ Dipendenze installate correttamente');
+        } else {
+          addLog('❌ Errore installazione dipendenze:');
+          addLog('   ${installProcess.stderr}');
+          throw Exception('Errore installazione dipendenze npm');
+        }
+      } catch (e) {
+        addLog('❌ Impossibile eseguire npm: $e');
+        throw Exception('npm non trovato. Assicurati che Node.js sia installato');
       }
     } else {
       addLog('✅ Dipendenze npm già presenti');

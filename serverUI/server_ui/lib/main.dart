@@ -1,30 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:window_manager/window_manager.dart';
 import 'providers/server_provider.dart';
 import 'services/tray_service.dart';
 import 'screens/home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Inizializza il system tray (se supportato)
+  // La configurazione della finestra su Windows è gestita nativamente
   
-  // Configurazione window manager per desktop
-  await windowManager.ensureInitialized();
-  
-  WindowOptions windowOptions = const WindowOptions(
-    size: Size(1200, 800),
-    center: true,
-    backgroundColor: Colors.transparent,
-    skipTaskbar: false,
-    titleBarStyle: TitleBarStyle.normal,
-    title: 'Server Manager',
-  );
-  
-  windowManager.waitUntilReadyToShow(windowOptions, () async {
-    await windowManager.show();
-    await windowManager.focus();
-  });
-
   runApp(const ServerManagerApp());
 }
 
@@ -36,7 +20,7 @@ class ServerManagerApp extends StatelessWidget {
     return ChangeNotifierProvider(
       create: (context) => ServerProvider(),
       child: MaterialApp(
-        title: 'Server Manager',
+        title: 'Sinergy Work - Server Manager',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           primarySwatch: Colors.blue,
