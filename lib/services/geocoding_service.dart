@@ -6,7 +6,7 @@ import 'package:latlong2/latlong.dart';
 /// Funziona su Android, iOS, Windows, macOS, Linux e Web
 class GeocodingService {
   static const String _baseUrl = 'https://nominatim.openstreetmap.org';
-  static const String _userAgent = 'IngressoUscita/1.0';
+  static const String _userAgent = 'SinergyWork/1.0';
   
   /// Cerca un indirizzo e restituisce le coordinate
   /// 

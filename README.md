@@ -1,4 +1,4 @@
-# 📱 Sistema Timbratura Presenze
+# 📱 Sinergy Work
 
 Sistema completo di gestione timbrature con geolocalizzazione e gestione cantieri.
 
