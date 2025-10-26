@@ -1,0 +1,36 @@
+# Node modules
+node_modules/
+
+# Database files
+*.db
+!database.db
+
+# Excel reports (except template)
+reports/attendance_report_*.xlsx
+reports/BACKUP_*.xlsx
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment variables
+.env
+.env.local
+
+# Email configuration (contiene password SMTP)
+email_config.json
+
+# Test files
+*test*.js
+*_test.js
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

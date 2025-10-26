@@ -1,0 +1,44 @@
+{
+  "_comment": "CONFIGURAZIONE EMAIL - ESEMPIO",
+  "_instructions": [
+    "1. Rinomina questo file in 'email_config.json'",
+    "2. Compila i campi con le tue credenziali SMTP",
+    "3. Per Gmail: usa una 'App Password' (vedi EMAIL_SISTEMA.md)",
+    "4. NON committare questo file su git (è in .gitignore)"
+  ],
+  
+  "emailEnabled": false,
+  "smtpHost": "smtp.gmail.com",
+  "smtpPort": 587,
+  "smtpSecure": false,
+  "smtpUser": "your-email@gmail.com",
+  "smtpPassword": "your-app-password-16-chars",
+  "fromEmail": "your-email@gmail.com",
+  "fromName": "Sistema Timbrature Aziendale",
+  "dailyReportEnabled": true,
+  "dailyReportTime": "00:05",
+  
+  "_examples": {
+    "gmail": {
+      "smtpHost": "smtp.gmail.com",
+      "smtpPort": 587,
+      "smtpSecure": false,
+      "note": "Usa App Password, non password account"
+    },
+    "outlook": {
+      "smtpHost": "smtp-mail.outlook.com",
+      "smtpPort": 587,
+      "smtpSecure": false
+    },
+    "yahoo": {
+      "smtpHost": "smtp.mail.yahoo.com",
+      "smtpPort": 587,
+      "smtpSecure": false
+    },
+    "custom_ssl": {
+      "smtpHost": "mail.tuodominio.com",
+      "smtpPort": 465,
+      "smtpSecure": true
+    }
+  }
+}
