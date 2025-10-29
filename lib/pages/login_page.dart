@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import '../services/timbratura_qr_service.dart';
 import '../main.dart';
+import 'debug_log_page.dart';
 
 class LoginPage extends StatefulWidget {
   @override
@@ -17,6 +19,7 @@ class _LoginPageState extends State<LoginPage> {
   bool _isCheckingServer = false;
   bool _rememberMe = false;
   bool _isAutoLoggingIn = false;
+  int _debugTapCount = 0;
 
   @override
   void initState() {
@@ -117,6 +120,35 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
+
+
+  Future<void> _executeQRTimbratura() async {
+    final appState = context.read<AppState>();
+    final qrData = appState.pendingQRData;
+    
+    if (qrData == null || appState.currentEmployee == null) {
+      return;
+    }
+
+    print('[LOGIN] 🚀 Inizio chiamata al servizio timbratura QR - NESSUN ALERT!');
+    final timbratureService = TimbratureQRService();
+    
+    try {
+      final result = await timbratureService.timbraFromQR(
+        qrData: qrData,
+        userId: appState.currentEmployee!.id.toString(),
+        authToken: 'dummy_token', // TODO: Implementare sistema auth token
+      ).timeout(Duration(seconds: 30));
+
+      print('[LOGIN] 🏁 Fine chiamata servizio, risultato: ${result.success} - NESSUN ALERT MOSTRATO');
+    } catch (e) {
+      print('[LOGIN] ❌ Timeout o errore servizio timbratura: $e - NESSUN ALERT MOSTRATO');
+    }
+    
+    // Pulisci QR pending
+    appState.clearPendingQRData();
+  }
+
   Future<void> _login() async {
     final username = _usernameController.text.trim();
     final password = _passwordController.text;
@@ -149,7 +181,14 @@ class _LoginPageState extends State<LoginPage> {
         }
 
         if (!mounted) return;
-        context.read<AppState>().setEmployee(employee);
+        final appState = context.read<AppState>();
+        appState.setEmployee(employee);
+        
+        // Se c'è QR pending, esegui timbratura
+        if (appState.pendingQRData != null) {
+          await _executeQRTimbratura();
+        }
+        
         // La navigazione è gestita automaticamente dal Consumer in main.dart
       } else {
         if (!mounted) return;
@@ -475,14 +514,77 @@ class _LoginPageState extends State<LoginPage> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // Logo Sinergy Work
-                Image.asset(
-                  'assets/images/logo.png',
-                  width: 250,
-                  height: 250,
-                  fit: BoxFit.contain,
+                // Logo Sinergy Work (con debug tap nascosto)
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _debugTapCount++;
+                      if (_debugTapCount >= 7) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('🐛 Debug mode attivato'),
+                            backgroundColor: Colors.orange,
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                    });
+                  },
+                  child: Image.asset(
+                    'assets/images/logo.png',
+                    width: 250,
+                    height: 250,
+                    fit: BoxFit.contain,
+                  ),
                 ),
                 const SizedBox(height: 30),
+                
+
+                
+                // Indicatore GPS se in attesa GPS
+                Consumer<AppState>(
+                  builder: (context, appState, child) {
+                    if (appState.isWaitingForGPS) {
+                      return Column(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: appState.isGPSReady ? Colors.green.shade50 : Colors.orange.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: appState.isGPSReady ? Colors.green : Colors.orange,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                appState.isGPSReady 
+                                  ? const Icon(Icons.gps_fixed, color: Colors.green, size: 20)
+                                  : const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    appState.isGPSReady
+                                        ? 'GPS pronto - Puoi effettuare il login'
+                                        : 'Triangolazione GPS in corso...',
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  },
+                ),
+                
                 const Text(
                   'Benvenuto',
                   style: TextStyle(
@@ -555,19 +657,35 @@ class _LoginPageState extends State<LoginPage> {
                 ],
               ),
               const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _login,
-                  child: _isLoading 
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Login'),
-                ),
+              Consumer<AppState>(
+                builder: (context, appState, child) {
+                  final isWaitingForGPS = appState.isWaitingForGPS && !appState.isGPSReady;
+                  final isButtonDisabled = _isLoading || isWaitingForGPS;
+                  
+                  return SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton(
+                      onPressed: isButtonDisabled ? null : _login,
+                      child: _isLoading 
+                        ? const CircularProgressIndicator(strokeWidth: 2, color: Colors.white)
+                        : isWaitingForGPS 
+                          ? const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SizedBox(
+                                  height: 16,
+                                  width: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                ),
+                                SizedBox(width: 8),
+                                Text('Attendi GPS...'),
+                              ],
+                            )
+                          : const Text('Login'),
+                    ),
+                  );
+                },
               ),
               const SizedBox(height: 40),
               // Pulsanti per gestione server
@@ -619,6 +737,19 @@ class _LoginPageState extends State<LoginPage> {
         ),
       ),
       ),
+      floatingActionButton: _debugTapCount >= 7 
+        ? FloatingActionButton(
+            mini: true,
+            backgroundColor: Colors.orange,
+            child: const Icon(Icons.bug_report, color: Colors.white),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const DebugLogPage(),
+              ),
+            ),
+          )
+        : null,
     );
   }
 }

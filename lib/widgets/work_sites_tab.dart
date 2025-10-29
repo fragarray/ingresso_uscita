@@ -2,9 +2,11 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/work_site.dart';
 import '../services/api_service.dart';
 import '../services/geocoding_service.dart';
+import '../services/qr_code_service.dart';
 
 // Tipi di mappa disponibili
 enum MapType {
@@ -758,6 +760,22 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
                 const Divider(),
                 const SizedBox(height: 8),
                 
+                // Pulsante QR Code
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _showQRCode(freshWorkSite),
+                    icon: const Icon(Icons.qr_code),
+                    label: const Text('GENERA QR CODE'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
@@ -788,6 +806,34 @@ class _WorkSitesTabState extends State<WorkSitesTab> {
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Errore: $e')),
+      );
+    }
+  }
+
+  Future<void> _showQRCode(WorkSite workSite) async {
+    try {
+      // Ottieni informazioni server dalle SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      final serverIp = prefs.getString('serverIp') ?? ApiService.getDefaultServerIp();
+      final serverPort = prefs.getInt('serverPort') ?? ApiService.getDefaultServerPort();
+
+      // Chiudi il dialog corrente
+      Navigator.pop(context);
+
+      // Mostra il QR code dialog
+      QRCodeService().showQRDialog(
+        context: context,
+        workSite: workSite,
+        serverHost: serverIp,
+        serverPort: serverPort,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Errore generazione QR: $e'),
+          backgroundColor: Colors.red,
+        ),
       );
     }
   }

@@ -888,28 +888,7 @@ class _EmployeePageState extends State<EmployeePage> {
           const SizedBox(width: 8),
         ],
       ),
-      body: _isLoading
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(
-                    strokeWidth: 3,
-                    color: Theme.of(context).primaryColor,
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    'Timbratura in corso...',
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: Colors.grey[600],
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            )
-          : _workSites.isEmpty
+      body: _workSites.isEmpty
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
