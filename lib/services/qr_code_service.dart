@@ -7,6 +7,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 import '../models/work_site.dart';
 
 class QRCodeService {
@@ -153,6 +155,180 @@ class QRCodeService {
         ),
       ],
     );
+  }
+
+  /// Genera PDF A4 con QR code e informazioni cantiere
+  Future<String?> generatePDF({
+    required WorkSite workSite,
+    required String serverHost,
+    required int serverPort,
+  }) async {
+    try {
+      // Chiedi all'utente dove salvare il PDF
+      final String? selectedDirectory = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: 'Seleziona cartella per salvare il PDF',
+      );
+
+      if (selectedDirectory == null) {
+        return null; // Utente ha annullato
+      }
+
+      final deepLink = generateDeepLink(
+        workSite: workSite,
+        serverHost: serverHost,
+        serverPort: serverPort,
+      );
+
+      // Crea documento PDF
+      final pdf = pw.Document();
+
+      // Genera QR code come widget PDF
+      final qrCode = pw.BarcodeWidget(
+        barcode: pw.Barcode.qrCode(
+          errorCorrectLevel: pw.BarcodeQRCorrectionLevel.medium,
+        ),
+        data: deepLink,
+        width: 300,
+        height: 300,
+      );
+
+      // Aggiungi pagina al PDF
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          build: (pw.Context context) {
+            return pw.Center(
+              child: pw.Column(
+                mainAxisAlignment: pw.MainAxisAlignment.center,
+                crossAxisAlignment: pw.CrossAxisAlignment.center,
+                children: [
+                  // Logo/Titolo
+                  pw.Text(
+                    'SinergyWork',
+                    style: pw.TextStyle(
+                      fontSize: 48,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.blue700,
+                    ),
+                  ),
+                  pw.SizedBox(height: 30),
+                  
+                  // Nome cantiere
+                  pw.Container(
+                    padding: const pw.EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(
+                        color: PdfColors.blue700,
+                        width: 2,
+                      ),
+                      borderRadius: pw.BorderRadius.circular(8),
+                    ),
+                    child: pw.Text(
+                      workSite.name,
+                      style: pw.TextStyle(
+                        fontSize: 32,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                      textAlign: pw.TextAlign.center,
+                    ),
+                  ),
+                  pw.SizedBox(height: 20),
+                  
+                  // Indirizzo
+                  pw.Text(
+                    workSite.address,
+                    style: const pw.TextStyle(
+                      fontSize: 18,
+                      color: PdfColors.grey700,
+                    ),
+                    textAlign: pw.TextAlign.center,
+                  ),
+                  pw.SizedBox(height: 40),
+                  
+                  // Istruzioni
+                  pw.Text(
+                    'TIMBRA CON QR',
+                    style: pw.TextStyle(
+                      fontSize: 28,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.blue900,
+                    ),
+                  ),
+                  pw.SizedBox(height: 30),
+                  
+                  // QR Code
+                  pw.Container(
+                    padding: const pw.EdgeInsets.all(20),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(
+                        color: PdfColors.grey400,
+                        width: 3,
+                      ),
+                      borderRadius: pw.BorderRadius.circular(12),
+                    ),
+                    child: qrCode,
+                  ),
+                  pw.SizedBox(height: 30),
+                  
+                  // Istruzioni aggiuntive
+                  pw.Container(
+                    padding: const pw.EdgeInsets.all(16),
+                    decoration: pw.BoxDecoration(
+                      color: PdfColors.blue50,
+                      borderRadius: pw.BorderRadius.circular(8),
+                    ),
+                    child: pw.Column(
+                      children: [
+                        pw.Text(
+                          'Come utilizzare:',
+                          style: pw.TextStyle(
+                            fontSize: 14,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                        pw.SizedBox(height: 8),
+                        pw.Text(
+                          '1. Inquadra il QR code con la fotocamera dello smartphone',
+                          style: const pw.TextStyle(fontSize: 12),
+                        ),
+                        pw.Text(
+                          '2. L\'app SinergyWork si aprirà automaticamente',
+                          style: const pw.TextStyle(fontSize: 12),
+                        ),
+                        pw.Text(
+                          '3. Effettua il login con le tue credenziali',
+                          style: const pw.TextStyle(fontSize: 12),
+                        ),
+                        pw.Text(
+                          '4. La timbratura verrà registrata automaticamente',
+                          style: const pw.TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+
+      // Salva PDF
+      final fileName = 'QR_${workSite.name.replaceAll(RegExp(r'[^\w\s-]'), '_')}_${DateTime.now().millisecondsSinceEpoch}.pdf';
+      final outputFile = '$selectedDirectory/$fileName';
+      final file = File(outputFile);
+      await file.writeAsBytes(await pdf.save());
+
+      print('[QRCode] ✅ PDF salvato: ${file.path}');
+      return file.path;
+
+    } catch (e) {
+      print('[QRCode] ❌ Errore generazione PDF: $e');
+      return null;
+    }
   }
 
   /// Salva QR code come immagine con selezione cartella
@@ -389,6 +565,48 @@ class QRCodeService {
                           ElevatedButton.icon(
                             onPressed: () async {
                               Navigator.of(context).pop();
+                              final filePath = await generatePDF(
+                                workSite: workSite,
+                                serverHost: serverHost,
+                                serverPort: serverPort,
+                              );
+                              if (!context.mounted) return;
+                              if (filePath != null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('PDF salvato in:\n$filePath'),
+                                    backgroundColor: Colors.green,
+                                    duration: const Duration(seconds: 5),
+                                    action: SnackBarAction(
+                                      label: 'APRI CARTELLA',
+                                      textColor: Colors.white,
+                                      onPressed: () {
+                                        final dir = File(filePath).parent.path;
+                                        Process.run('explorer', [dir]);
+                                      },
+                                    ),
+                                  ),
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Generazione PDF annullata'),
+                                    backgroundColor: Colors.orange,
+                                  ),
+                                );
+                              }
+                            },
+                            icon: const Icon(Icons.picture_as_pdf),
+                            label: const Text('SALVA PDF'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton.icon(
+                            onPressed: () async {
+                              Navigator.of(context).pop();
                               
                               // Mostra loading
                               showDialog(
@@ -401,7 +619,7 @@ class QRCodeService {
                                       CircularProgressIndicator(color: Colors.white),
                                       SizedBox(height: 16),
                                       Text(
-                                        'Salvataggio QR code...',
+                                        'Salvataggio PNG...',
                                         style: TextStyle(color: Colors.white, fontSize: 16),
                                       ),
                                     ],
@@ -440,13 +658,13 @@ class QRCodeService {
                               } else {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
-                                    content: Text('Salvataggio annullato dall\'utente'),
+                                    content: Text('Salvataggio annullato'),
                                     backgroundColor: Colors.orange,
                                   ),
                                 );
                               }
                             },
-                            icon: const Icon(Icons.save),
+                            icon: const Icon(Icons.image),
                             label: const Text('SALVA PNG'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.green,

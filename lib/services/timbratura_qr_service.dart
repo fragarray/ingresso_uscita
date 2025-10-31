@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:geolocator/geolocator.dart';
+import 'package:location/location.dart';
 import 'gps_service.dart';
 import 'deep_link_service.dart';
 import 'debug_log_service.dart';
@@ -65,7 +65,7 @@ class TimbratureQRService {
       // 1. Ottieni GPS (dovrebbe essere già precaricato)
       await _debugLog.log('Timbratura', '📍 STEP 1 - Ottenimento GPS...');
       final gpsService = GPSService();
-      Position? position = await gpsService.getCurrentPosition();
+      LocationData? position = await gpsService.getCurrentPosition();
 
       if (position == null) {
         await _debugLog.log('Timbratura', '❌ ERRORE STEP 1 - GPS nullo');
@@ -75,7 +75,7 @@ class TimbratureQRService {
       await _debugLog.log('Timbratura', '✅ STEP 1 COMPLETATO - GPS: ${position.latitude}, ${position.longitude}, accuracy: ${position.accuracy}m');
 
       // Verifica accuratezza (opzionale)
-      if (position.accuracy > 50) {
+      if ((position.accuracy ?? 999) > 50) {
         print('[Timbratura] ⚠️ Accuratezza GPS bassa: ${position.accuracy}m');
         // TODO: Mostra warning all'utente
       }
@@ -98,9 +98,9 @@ class TimbratureQRService {
         userId: userId,
         cantiereId: qrData.cantiereId,
         cantiereName: qrData.cantiereName,
-        latitude: position.latitude,
-        longitude: position.longitude,
-        accuracy: position.accuracy,
+        latitude: position.latitude ?? 0.0,
+        longitude: position.longitude ?? 0.0,
+        accuracy: position.accuracy ?? 999.0,
         tipo: tipo,
         serverHost: qrData.serverHost,
         serverPort: qrData.serverPort,

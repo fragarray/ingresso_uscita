@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/timbratura_qr_service.dart';
+import '../models/employee.dart';
 import '../main.dart';
 import 'debug_log_page.dart';
 
@@ -72,6 +73,16 @@ class _LoginPageState extends State<LoginPage> {
         final employee = await ApiService.login(savedUsername, savedPassword);
         
         if (employee != null && mounted) {
+          // SICUREZZA: Verifica se è un operaio
+          if (employee.role == EmployeeRole.employee) {
+            print('[LoginPage] 🔒 OPERAIO rilevato - Auto-login DISABILITATO per sicurezza');
+            await prefs.setBool('auto_login', false);
+            setState(() => _isAutoLoggingIn = false);
+            return; // Forza login manuale
+          }
+          
+          // Solo ADMIN e TITOLARI possono fare auto-login
+          print('[LoginPage] 👑 ADMIN/TITOLARE - Auto-login consentito');
           context.read<AppState>().setEmployee(employee);
           // La navigazione è gestita automaticamente dal Consumer in main.dart
         } else {
@@ -166,18 +177,37 @@ class _LoginPageState extends State<LoginPage> {
       final employee = await ApiService.login(username, password);
       
       if (employee != null) {
-        // Salva le credenziali se "Ricorda" è attivo
+        // Gestione credenziali basata sul ruolo
         final prefs = await SharedPreferences.getInstance();
-        if (_rememberMe) {
-          await prefs.setString('saved_username', username);
-          await prefs.setString('saved_password', password);
-          await prefs.setBool('remember_me', true);
-          await prefs.setBool('auto_login', true);
-        } else {
-          await prefs.remove('saved_username');
-          await prefs.remove('saved_password');
-          await prefs.setBool('remember_me', false);
+        
+        if (employee.role == EmployeeRole.employee) {
+          // OPERAIO: Salva credenziali se richiesto ma MAI auto-login
+          print('[LoginPage] 🔒 OPERAIO - Salvo credenziali ma disabilito auto-login');
+          if (_rememberMe) {
+            await prefs.setString('saved_username', username);
+            await prefs.setString('saved_password', password);
+            await prefs.setBool('remember_me', true);
+          } else {
+            await prefs.remove('saved_username');
+            await prefs.remove('saved_password');
+            await prefs.setBool('remember_me', false);
+          }
+          // SEMPRE disabilitato auto-login per operai
           await prefs.setBool('auto_login', false);
+        } else {
+          // ADMIN/TITOLARE: Ricorda = Auto-login completo
+          print('[LoginPage] 👑 ADMIN/TITOLARE - Ricorda = Auto-login');
+          if (_rememberMe) {
+            await prefs.setString('saved_username', username);
+            await prefs.setString('saved_password', password);
+            await prefs.setBool('remember_me', true);
+            await prefs.setBool('auto_login', true);
+          } else {
+            await prefs.remove('saved_username');
+            await prefs.remove('saved_password');
+            await prefs.setBool('remember_me', false);
+            await prefs.setBool('auto_login', false);
+          }
         }
 
         if (!mounted) return;
@@ -592,6 +622,32 @@ class _LoginPageState extends State<LoginPage> {
                     fontSize: 26,
                   ),
                 ),
+                const SizedBox(height: 10),
+                // Avviso di sicurezza per operai
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Operai: Login manuale obbligatorio ad ogni accesso (auto-logout 60s)',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.blue.shade800,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 20),
               TextField(
                 controller: _usernameController,
@@ -649,7 +705,7 @@ class _LoginPageState extends State<LoginPage> {
                               });
                             },
                       child: const Text(
-                        'Ricorda le credenziali',
+                        'Ricorda credenziali',
                         style: TextStyle(fontSize: 15),
                       ),
                     ),

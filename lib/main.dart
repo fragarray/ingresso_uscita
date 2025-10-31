@@ -42,6 +42,7 @@ class AppState extends ChangeNotifier {
   bool _isGPSReady = false; // Stato GPS per login
   bool _isWaitingForGPS = false; // Indica se stiamo aspettando il GPS
   Timer? _gpsTimeoutTimer; // Timer per timeout GPS
+  Timer? _employeeAutoLogoutTimer; // Timer per auto-logout operai (60 secondi)
   
   Employee? get currentEmployee => _currentEmployee;
   int get refreshCounter => _refreshCounter;
@@ -113,11 +114,24 @@ class AppState extends ChangeNotifier {
   
   void setEmployee(Employee employee) {
     _currentEmployee = employee;
+    
+    // SICUREZZA: Auto-logout per operai dopo 60 secondi
+    if (employee.role == EmployeeRole.employee) {
+      print('[AppState] 🔒 OPERAIO loggato - Timer auto-logout 60s attivato');
+      _startEmployeeAutoLogoutTimer();
+    } else {
+      print('[AppState] 👑 ADMIN/TITOLARE loggato - Nessun auto-logout');
+      _stopEmployeeAutoLogoutTimer();
+    }
+    
     notifyListeners();
   }
   
   Future<void> logout() async {
     _currentEmployee = null;
+    
+    // Ferma timer auto-logout se attivo
+    _stopEmployeeAutoLogoutTimer();
     
     // Disabilita l'auto-login quando si fa logout manualmente
     final prefs = await SharedPreferences.getInstance();
@@ -180,9 +194,42 @@ class AppState extends ChangeNotifier {
     _gpsTimeoutTimer = null;
   }
   
+  /// Avvia timer di auto-logout per operai (60 secondi)
+  void _startEmployeeAutoLogoutTimer() {
+    _stopEmployeeAutoLogoutTimer(); // Cancella timer esistente
+    
+    _employeeAutoLogoutTimer = Timer(const Duration(seconds: 60), () {
+      print('[AppState] ⏰ TIMEOUT 60s - Auto-logout operaio per sicurezza');
+      
+      // Logout automatico
+      _currentEmployee = null;
+      _stopEmployeeAutoLogoutTimer();
+      
+      // Non disabilitare auto-login per operai (già gestito altrove)
+      notifyListeners();
+    });
+    
+    print('[AppState] 🔒 Timer auto-logout operaio avviato (60s)');
+  }
+  
+  /// Reset timer auto-logout per operai quando interagiscono
+  void resetEmployeeAutoLogoutTimer() {
+    if (_currentEmployee?.role == EmployeeRole.employee && _employeeAutoLogoutTimer != null) {
+      print('[AppState] 🔄 Reset timer auto-logout operaio per attività');
+      _startEmployeeAutoLogoutTimer(); // Riavvia il timer
+    }
+  }
+  
+  /// Ferma timer di auto-logout
+  void _stopEmployeeAutoLogoutTimer() {
+    _employeeAutoLogoutTimer?.cancel();
+    _employeeAutoLogoutTimer = null;
+  }
+  
   @override
   void dispose() {
     _gpsTimeoutTimer?.cancel();
+    _employeeAutoLogoutTimer?.cancel();
     super.dispose();
   }
 }
@@ -227,15 +274,31 @@ class _MyAppState extends State<MyApp> {
         });
         print('[App] 🛰️ GPS preloading avviato...');
       } else {
-        // Utente già loggato → Timbra direttamente
-        print('[App] ✅ Utente già loggato, timbro direttamente...');
-        
-        // Start GPS for accuracy
-        final gpsService = GPSService();
-        gpsService.preloadGPS();
-        print('[App] 🛰️ GPS preloading avviato...');
-        
-        _handleQRTimbratura(qrData);
+        // SICUREZZA: Verifica se è un operaio
+        if (appState.currentEmployee!.role == EmployeeRole.employee) {
+          print('[App] 🔒 OPERAIO già loggato ma FORZO LOGOUT per sicurezza QR');
+          // Forza logout per operai anche se loggati
+          appState.logout();
+          // Avvia GPS waiting mode per forzare nuovo login
+          appState.startGPSWaitingMode();
+          final gpsService = GPSService();
+          gpsService.preloadGPS().then((_) {
+            _checkGPSAccuracy(appState, gpsService);
+          }).catchError((error) {
+            print('[App] ❌ GPS preload error: $error');
+            appState.setGPSReady(false);
+          });
+        } else {
+          // Utente ADMIN/TITOLARE già loggato → Timbra direttamente
+          print('[App] ✅ ADMIN/TITOLARE già loggato, timbro direttamente...');
+          
+          // Start GPS for accuracy
+          final gpsService = GPSService();
+          gpsService.preloadGPS();
+          print('[App] 🛰️ GPS preloading avviato...');
+          
+          _handleQRTimbratura(qrData);
+        }
       }
     };
   }

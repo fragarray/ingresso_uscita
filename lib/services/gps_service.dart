@@ -1,14 +1,14 @@
-import 'package:geolocator/geolocator.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:location/location.dart';
 
 class GPSService {
   static final GPSService _instance = GPSService._internal();
   factory GPSService() => _instance;
   GPSService._internal();
 
-  Position? _cachedPosition;
+  LocationData? _cachedPosition;
   bool _isLoading = false;
   DateTime? _lastUpdate;
+  final Location _location = Location();
 
   /// Avvia preloading GPS QUANDO deep link viene ricevuto
   /// ⚠️ NON chiamare in main() - troppo presto
@@ -29,18 +29,23 @@ class GPSService {
       }
 
       // 2. Verifica che GPS sia abilitato
-      final isEnabled = await Geolocator.isLocationServiceEnabled();
+      final isEnabled = await _location.serviceEnabled();
       if (!isEnabled) {
         print('[GPS] ⚠️ GPS disabilitato sul dispositivo');
-        // TODO: Mostra dialog per abilitare GPS
-        _isLoading = false;
-        return;
+        final enabled = await _location.requestService();
+        if (!enabled) {
+          print('[GPS] ❌ Utente ha rifiutato di abilitare GPS');
+          _isLoading = false;
+          return;
+        }
       }
 
       // 3. Ottieni posizione attuale
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: Duration(seconds: 10), // Timeout 10s
+      final position = await _location.getLocation().timeout(
+        Duration(seconds: 10),
+        onTimeout: () {
+          throw Exception('GPS timeout dopo 10 secondi');
+        },
       );
 
       _cachedPosition = position;
@@ -56,7 +61,7 @@ class GPSService {
   }
 
   /// Ottieni posizione (usa cache se recente)
-  Future<Position?> getCurrentPosition() async {
+  Future<LocationData?> getCurrentPosition() async {
     // Se cache è recente (< 30 secondi), usala
     if (_cachedPosition != null && _lastUpdate != null) {
       final age = DateTime.now().difference(_lastUpdate!);
@@ -69,9 +74,11 @@ class GPSService {
     // Altrimenti ottieni nuova posizione
     print('[GPS] 🔄 Aggiornamento posizione...');
     try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: Duration(seconds: 10),
+      final position = await _location.getLocation().timeout(
+        Duration(seconds: 10),
+        onTimeout: () {
+          throw Exception('GPS timeout dopo 10 secondi');
+        },
       );
       
       _cachedPosition = position;
@@ -86,26 +93,20 @@ class GPSService {
 
   /// Verifica e richiedi permessi GPS
   Future<bool> _checkAndRequestPermission() async {
-    var status = await Permission.location.status;
+    var permissionStatus = await _location.hasPermission();
     
-    if (status.isGranted) {
+    if (permissionStatus == PermissionStatus.granted || 
+        permissionStatus == PermissionStatus.grantedLimited) {
       return true;
     }
 
     // Richiedi permessi
-    if (status.isDenied) {
-      status = await Permission.location.request();
+    if (permissionStatus == PermissionStatus.denied) {
+      permissionStatus = await _location.requestPermission();
     }
 
-    // Se ancora negato, richiedi always (per background)
-    if (status.isGranted) {
-      final alwaysStatus = await Permission.locationAlways.status;
-      if (alwaysStatus.isDenied) {
-        await Permission.locationAlways.request();
-      }
-    }
-
-    return status.isGranted;
+    return permissionStatus == PermissionStatus.granted || 
+           permissionStatus == PermissionStatus.grantedLimited;
   }
 
   /// Verifica se GPS è pronto
