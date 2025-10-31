@@ -21,7 +21,6 @@ class _EmployeePageState extends State<EmployeePage> {
   List<WorkSite> _workSites = [];
   WorkSite? _selectedWorkSite;
   double _gpsAccuracy = 0.0; // Accuratezza GPS in metri
-  bool _hasGoodAccuracy = false; // Se l'accuratezza è accettabile
   AppState? _appState; // Riferimento salvato
   int _lastRefreshCounter = -1; // Traccia l'ultimo refresh processato
 
@@ -166,7 +165,6 @@ class _EmployeePageState extends State<EmployeePage> {
         setState(() {
           _currentLocation = location;
           _gpsAccuracy = accuracy;
-          _hasGoodAccuracy = accuracyPercentage >= minRequired;
         });
         
         debugPrint('GPS Accuracy: ${accuracy.toStringAsFixed(1)}m (${accuracyPercentage.toStringAsFixed(0)}%) - Required: ${minRequired.toInt()}%');
@@ -214,24 +212,6 @@ class _EmployeePageState extends State<EmployeePage> {
       );
       return;
     }
-    
-      // Verifica accuratezza GPS
-      if (!_hasGoodAccuracy && !Platform.isWindows && !kIsWeb) {
-        final accuracyPercentage = _calculateAccuracyPercentage(_gpsAccuracy);
-        final minRequired = _appState?.minGpsAccuracyPercent ?? 65.0;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Accuratezza GPS insufficiente (${accuracyPercentage.toStringAsFixed(0)}%).\n'
-            'Richiesta: minimo ${minRequired.toInt()}%. Attendi un segnale GPS migliore.'
-          ),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 4),
-        ),
-      );
-      return;
-    }
-    
     setState(() => _isLoading = true);
 
     try {
@@ -396,10 +376,9 @@ class _EmployeePageState extends State<EmployeePage> {
     });
 
     // Verifica accuratezza GPS
-    if (!_hasGoodAccuracy && !Platform.isWindows && !kIsWeb) {
-      final accuracyPercentage = _calculateAccuracyPercentage(_gpsAccuracy);
-      final minRequired = _appState?.minGpsAccuracyPercent ?? 65.0;
-      
+    final accuracyPercentage = _calculateAccuracyPercentage(_gpsAccuracy);
+    final minRequired = _appState?.minGpsAccuracyPercent ?? 65.0;
+    if (accuracyPercentage < minRequired && !Platform.isWindows && !kIsWeb) {
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -411,7 +390,7 @@ class _EmployeePageState extends State<EmployeePage> {
             ],
           ),
           content: Text(
-            'Accuratezza GPS attuale: ${accuracyPercentage.toStringAsFixed(0)}%\n'
+            'Accuratezza GPS attuale: ${accuracyPercentage.toStringAsFixed(0)}% (${_gpsAccuracy.toStringAsFixed(1)}m)\n'
             'Richiesta: minimo ${minRequired.toInt()}%\n\n'
             'Attendi un segnale GPS migliore prima di timbrare.',
           ),
